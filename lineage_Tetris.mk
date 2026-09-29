@@ -10,18 +10,10 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/full_base_telephony.mk)
 # Inherit from Tetris device
 $(call inherit-product, device/nothing/Tetris/device.mk)
 
-# Inherit some common BlissRoms stuff.
-$(call inherit-product, vendor/bliss/config/common_full_phone.mk)
+# Inherit common LineageOS configuration.
+$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
 
-# Bootanimation
-TARGET_BOOT_ANIMATION_RES := 1080
-
-BLISS_BUILDTYPE := OFFICIAL
-EXTRA_UDFPS_ANIMATIONS := true
-TARGET_HAS_UDFPS := true
-GAPPS_ARCH := arm64
-
-PRODUCT_NAME := bliss_Tetris
+PRODUCT_NAME := lineage_Tetris
 PRODUCT_DEVICE := Tetris
 PRODUCT_BRAND := Nothing
 PRODUCT_MANUFACTURER := Nothing

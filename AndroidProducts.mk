@@ -4,4 +4,4 @@
 #
 
 PRODUCT_MAKEFILES := \
-    $(LOCAL_DIR)/bliss_Tetris.mk
+    $(LOCAL_DIR)/lineage_Tetris.mk
