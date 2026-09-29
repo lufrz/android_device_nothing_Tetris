@@ -1,0 +1,2 @@
+# Exposed to vendor policy for narrowly labelled device controls.
+type tetris_parts_app, domain;
