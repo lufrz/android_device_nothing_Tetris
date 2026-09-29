@@ -236,6 +236,9 @@ PRODUCT_PACKAGES += \
 PRODUCT_BOOT_JARS += \
     nt-fwk.Tetris
 
+# MediaTek telephony overlays read this flag during inheritance.
+ENABLE_VENDOR_RIL_SERVICE := true
+
 # Overlays
 $(call inherit-product, hardware/mediatek/overlay/mssi.mk)
 
@@ -283,7 +286,6 @@ PRODUCT_COPY_FILES += \
 include hardware/mediatek/configs/properties/vendor_logtag.mk
 
 # Radio
-ENABLE_VENDOR_RIL_SERVICE := true
 
 PRODUCT_PACKAGES += \
     mdota_symlink
