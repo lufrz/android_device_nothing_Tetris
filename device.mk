@@ -125,7 +125,7 @@ PRODUCT_COPY_FILES += \
 $(call inherit-product, hardware/dolby/dolby.mk)
 
 PRODUCT_PACKAGES += \
-        DolbyAtmos
+    LunarisDolby
 
 # Doze
 PRODUCT_PACKAGES += \
