@@ -1,0 +1,28 @@
+# The request and restore point last only for the current boot.
+on post-fs-data
+    mkdir /data/vendor/tetrisparts 0700 root root
+    restorecon_recursive /data/vendor/tetrisparts
+    rm /data/vendor/tetrisparts/thermal_previous
+    rm /data/vendor/tetrisparts/thermal_previous.tmp
+    setprop sys.tetrisparts.thermal_disabled 0
+    setprop vendor.tetrisparts.thermal_state changing
+    setprop vendor.tetrisparts.thermal_error none
+    setprop vendor.tetrisparts.thermal_errno 0
+    setprop vendor.tetrisparts.thermal_profile ""
+    setprop vendor.tetrisparts.thermal_result_id 0
+
+# The legacy daemon status has an exact, exported system property label. Without
+# it, init rejects this entire vendor action as an unexported property trigger.
+# Every request (even a retry of the same value) and daemon restart gets a result.
+on property:sys.tetrisparts.thermal_disabled=* && property:sys.boot_completed=1 && property:init.svc.thermal_core=*
+    setprop vendor.tetrisparts.thermal_state changing
+    restart vendor.tetris-parts-thermal
+
+service vendor.tetris-parts-thermal /vendor/bin/tetris_parts_thermal_control
+    class late_start
+    # thermal_core creates .current_tp as root:root 0600. No Linux capabilities.
+    user root
+    group root
+    capabilities
+    disabled
+    oneshot

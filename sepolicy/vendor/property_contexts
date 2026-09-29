@@ -7,3 +7,10 @@ persist.vendor.overlay.fp_vendor    u:object_r:vendor_fingerprint_prop:s0
 
 # Power
 vendor.touch.double_tap_to_wake    u:object_r:vendor_power_prop:s0
+
+# Tetris Parts: opt-in thermal policy, reset by init at boot.
+vendor.tetrisparts.thermal_state    u:object_r:vendor_tetrisparts_thermal_state_prop:s0 exact enum enabled disabled changing error
+vendor.tetrisparts.thermal_error    u:object_r:vendor_tetrisparts_thermal_state_prop:s0 exact string
+vendor.tetrisparts.thermal_errno    u:object_r:vendor_tetrisparts_thermal_state_prop:s0 exact int
+vendor.tetrisparts.thermal_profile  u:object_r:vendor_tetrisparts_thermal_state_prop:s0 exact string
+vendor.tetrisparts.thermal_result_id u:object_r:vendor_tetrisparts_thermal_state_prop:s0 exact int

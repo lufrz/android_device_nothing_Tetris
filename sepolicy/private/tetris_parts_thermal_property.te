@@ -1,0 +1,5 @@
+set_prop(tetris_parts_app, tetrisparts_thermal_request_prop)
+
+neverallow { domain -init -vendor_init -tetris_parts_app } tetrisparts_thermal_request_prop:property_service set;
+
+neverallow { domain -init } tetrisparts_thermal_daemon_prop:property_service set;

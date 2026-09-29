@@ -21,3 +21,7 @@
 # Vibrator
 /dev/aac_richtap                                                           u:object_r:aac_richtap_device:s0
 /vendor/bin/hw/android\.hardware\.vibrator\.service\.Tetris-richtap        u:object_r:hal_vibrator_default_exec:s0
+
+# Tetris Parts: vendor thermal policy bridge and boot-scoped restore point.
+/vendor/bin/tetris_parts_thermal_control u:object_r:tetris_parts_thermal_exec:s0
+/data/vendor/tetrisparts(/.*)?           u:object_r:tetris_parts_thermal_data_file:s0

@@ -1,0 +1,11 @@
+vendor_restricted_prop(vendor_tetrisparts_thermal_state_prop)
+
+get_prop(tetris_parts_app, vendor_tetrisparts_thermal_state_prop)
+set_prop(vendor_init, tetrisparts_thermal_request_prop)
+set_prop(vendor_init, vendor_tetrisparts_thermal_state_prop)
+
+neverallow { domain -init -vendor_init -tetris_parts_thermal } vendor_tetrisparts_thermal_state_prop:property_service set;
+
+# Required by IsActionableProperty when parsing the vendor RC on this release.
+get_prop(vendor_init, tetrisparts_thermal_daemon_prop)
+get_prop(tetris_parts_thermal, tetrisparts_thermal_daemon_prop)
