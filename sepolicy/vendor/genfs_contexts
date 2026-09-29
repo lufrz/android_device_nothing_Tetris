@@ -59,3 +59,19 @@ genfscon sysfs /devices/platform/soc/1c804000.spmi/spmi-0/0-09/mt6685-rtc/rtc/rt
 genfscon sysfs /devices/platform/soc/1e000000.adspsys/wakeup                                                                     u:object_r:sysfs_wakeup:s0
 genfscon sysfs /devices/platform/soc/1f000000.mmlsys-config/wakeup                                                               u:object_r:sysfs_wakeup:s0
 genfscon sysfs /devices/virtual/power_supply/mtk-gauge/wakeup39                                                                  u:object_r:sysfs_wakeup:s0
+
+# CPU policy limits and per-core hotplug for Tetris Parts.
+genfscon sysfs /devices/system/cpu/cpufreq/policy0/scaling_min_freq u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpufreq/policy0/scaling_max_freq u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpufreq/policy4/scaling_min_freq u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpufreq/policy4/scaling_max_freq u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpu1/online u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpu2/online u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpu3/online u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpu4/online u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpu5/online u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpu6/online u:object_r:vendor_tetris_cpu_control:s0
+genfscon sysfs /devices/system/cpu/cpu7/online u:object_r:vendor_tetris_cpu_control:s0
+
+genfscon sysfs /devices/system/cpu/cpufreq/policy0/scaling_locked_limits u:object_r:vendor_tetris_cpu_lock:s0
+genfscon sysfs /devices/system/cpu/cpufreq/policy4/scaling_locked_limits u:object_r:vendor_tetris_cpu_lock:s0
