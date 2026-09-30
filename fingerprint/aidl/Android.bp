@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: Apache-2.0
+
+aidl_interface {
+    name: "vendor.nothing.hardware.udfps",
+    owner: "nothing",
+    vendor_available: true,
+    srcs: ["vendor/nothing/hardware/udfps/*.aidl"],
+    stability: "vintf",
+    frozen: true,
+    versions_with_info: [{
+        version: "1",
+        imports: [],
+    }],
+    backend: {
+        java: {
+            enabled: true,
+            platform_apis: true,
+        },
+        cpp: {
+            enabled: false,
+        },
+        ndk: {
+            enabled: true,
+        },
+    },
+}
