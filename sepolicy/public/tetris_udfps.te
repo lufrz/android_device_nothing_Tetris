@@ -1,0 +1,7 @@
+# Stable system_ext Binder endpoint used by the vendor fingerprint service.
+# Its server is an app process, not a native halserverdomain.
+attribute tetris_udfps_client;
+attribute tetris_udfps_server;
+
+type tetris_udfps_service, protected_service, hal_service_type, service_manager_type;
+type tetris_udfps_app, domain;

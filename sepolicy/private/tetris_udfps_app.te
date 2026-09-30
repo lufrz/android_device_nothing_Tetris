@@ -1,0 +1,26 @@
+# The service lives on system_ext and runs at s0, without MLS exemptions.
+typeattribute tetris_udfps_app coredomain;
+typeattribute tetris_udfps_app tetris_udfps_server;
+app_domain(tetris_udfps_app)
+
+type tetris_udfps_app_data_file, file_type, data_file_type, core_data_file_type, app_data_file_type;
+allow tetris_udfps_app tetris_udfps_app_data_file:dir create_dir_perms;
+allow tetris_udfps_app tetris_udfps_app_data_file:{ file lnk_file } create_file_perms;
+
+add_service(tetris_udfps_server, tetris_udfps_service)
+allow tetris_udfps_client tetris_udfps_service:service_manager find;
+binder_call(tetris_udfps_client, tetris_udfps_server)
+binder_call(tetris_udfps_server, tetris_udfps_client)
+
+# Display state, brightness, and native SurfaceControl transactions.
+allow tetris_udfps_app {
+    activity_service
+    activity_task_service
+    display_service
+    package_service
+    power_service
+    surfaceflinger_service
+    # PowerManager also resolves the framework thermal Binder during construction.
+    thermal_service
+    window_service
+}:service_manager find;

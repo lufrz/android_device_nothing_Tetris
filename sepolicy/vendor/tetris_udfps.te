@@ -1,0 +1,9 @@
+# Only the FOD HBM request and Goodix UI-ready nodes have this label.
+type vendor_tetris_udfps_control, fs_type, sysfs_type;
+allow tetris_udfps_app vendor_sysfs_graphics:dir search;
+allow tetris_udfps_app vendor_tetris_udfps_control:file { getattr open read write };
+allow vendor_init vendor_tetris_udfps_control:file setattr;
+
+typeattribute hal_fingerprint_default tetris_udfps_client;
+# Preserve the HAL's existing reset access when these two nodes are relabelled.
+allow hal_fingerprint_default vendor_tetris_udfps_control:file { getattr open read write };

@@ -1,1 +1,2 @@
 user=system seinfo=platform isPrivApp=true name=org.lineageos.settings.tetris domain=tetris_parts_app type=system_app_data_file levelFrom=all
+user=system seinfo=platform isPrivApp=true name=org.lineageos.tetris.udfps domain=tetris_udfps_app type=tetris_udfps_app_data_file
