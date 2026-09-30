@@ -4,6 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+import hashlib
+
 from extract_utils.file import File
 from extract_utils.fixups_blob import (
     blob_fixup,
@@ -27,6 +29,33 @@ namespace_imports = [
 def lib_fixup_vendor_suffix(lib: str, partition: str, *args, **kwargs):
     return f'{lib}_{partition}' if partition == 'vendor' else None
 
+def blob_fixup_goodix_ui_ready_timeout(ctx, file: File, file_path: str,
+                                     *args, **kwargs):
+    # Screen-off pulses can exceed the stock 450 ms UI-ready deadline. Extend
+    # only the maximum wait to 1000 ms; readiness and finger-up still wake it.
+    original_hash = 'e9766a94fa3cf501de3449f37c45676ea9fe545fc3da0bcead65e1ae63245c07'
+    patched_hash = 'f80d3c632b76ad4d0b2e5de44dae604f75269deaff3d87b4de046336e993f92f'
+    offset = 0x31620
+    original_instruction = bytes.fromhex('41 38 80 52')  # mov w1, #450
+    patched_instruction = bytes.fromhex('01 7d 80 52')  # mov w1, #1000
+
+    with open(file_path, 'r+b') as blob:
+        data = blob.read()
+        digest = hashlib.sha256(data).hexdigest()
+        if digest == patched_hash:
+            return
+        if digest != original_hash:
+            raise ValueError(f'Unsupported libgf_hal.so UI-ready fixup: {digest}')
+        if data[offset:offset + 4] != original_instruction:
+            raise ValueError('Unexpected Goodix UI-ready wait instruction')
+
+        patched = data[:offset] + patched_instruction + data[offset + 4:]
+        if hashlib.sha256(patched).hexdigest() != patched_hash:
+            raise ValueError('Unexpected Goodix UI-ready fixup result')
+        blob.seek(offset)
+        blob.write(patched_instruction)
+
+
 lib_fixups: lib_fixups_user_type = {
     **lib_fixups,
     (
@@ -38,6 +67,8 @@ lib_fixups: lib_fixups_user_type = {
 }
 
 blob_fixups: blob_fixups_user_type = {
+    'vendor/lib64/libgf_hal.so': blob_fixup()
+        .call(blob_fixup_goodix_ui_ready_timeout, need_tmp_dir=False),
     (
         'system_ext/etc/init/init.vtservice.rc',
         'vendor/etc/init/android.hardware.neuralnetworks-shim-service-mtk.rc'
