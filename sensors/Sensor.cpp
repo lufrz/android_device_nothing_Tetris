@@ -20,6 +20,8 @@
 #include <log/log.h>
 #include <utils/SystemClock.h>
 
+#include <algorithm>
+#include <cerrno>
 #include <cmath>
 
 namespace {
@@ -82,13 +84,35 @@ static const std::vector<const char*> kSingleTapPaths = {
 
 static int openSysfsNode(const std::vector<const char*>& paths) {
     for (const char* path : paths) {
-        int fd = open(path, O_RDONLY);
+        int fd = open(path, O_RDONLY | O_CLOEXEC);
         if (fd >= 0) {
             ALOGI("Opened sysfs node %s (fd=%d)", path, fd);
             return fd;
         }
     }
     return -1;
+}
+
+// A full nonblocking pipe is already readable, so another byte is unnecessary.
+// Never block activate()/stop() while holding the mutex needed by the poll thread.
+static void wakePoll(int fd) {
+    if (fd < 0) return;
+    const char byte = '1';
+    ssize_t rc;
+    do {
+        rc = write(fd, &byte, sizeof(byte));
+    } while (rc < 0 && errno == EINTR);
+    if (rc < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        ALOGE("failed to interrupt sensor poll, errno: %d", errno);
+    }
+}
+
+static void drainPollWake(int fd) {
+    char bytes[64];
+    ssize_t rc;
+    do {
+        rc = read(fd, bytes, sizeof(bytes));
+    } while (rc > 0 || (rc < 0 && errno == EINTR));
 }
 
 }  // anonymous namespace
@@ -124,10 +148,20 @@ Sensor::Sensor(int32_t sensorHandle, ISensorsEventCallback* callback)
     mSensorInfo.fifoMaxEventCount = 0;
     mSensorInfo.requiredPermission = "";
     mSensorInfo.flags = 0;
-    mRunThread = std::thread(startThread, this);
+}
+
+void Sensor::start() {
+    std::lock_guard<std::mutex> lock(mRunMutex);
+    if (!mStopThread && !mRunThread.joinable()) {
+        mRunThread = std::thread(startThread, this);
+    }
 }
 
 Sensor::~Sensor() {
+    stop();
+}
+
+void Sensor::stop() {
     // Ensure that lock is unlocked before calling mRunThread.join() or a
     // deadlock will occur.
     {
@@ -136,7 +170,8 @@ Sensor::~Sensor() {
         mIsEnabled = false;
         mWaitCV.notify_all();
     }
-    mRunThread.join();
+    interruptPoll();
+    if (mRunThread.joinable()) mRunThread.join();
 }
 
 const SensorInfo& Sensor::getSensorInfo() const {
@@ -171,7 +206,7 @@ Result Sensor::flush() {
 
     // Note: If a sensor supports batching, write all of the currently batched events for the sensor
     // to the Event FMQ prior to writing the flush complete event.
-    Event ev;
+    Event ev{};
     ev.sensorHandle = mSensorInfo.sensorHandle;
     ev.sensorType = SensorType::META_DATA;
     ev.u.meta.what = MetaDataEventType::META_DATA_FLUSH_COMPLETE;
@@ -217,7 +252,7 @@ bool Sensor::isWakeUpSensor() {
 
 std::vector<Event> Sensor::readEvents() {
     std::vector<Event> events;
-    Event event;
+    Event event{};
     event.sensorHandle = mSensorInfo.sensorHandle;
     event.sensorType = mSensorInfo.type;
     event.timestamp = ::android::elapsedRealtimeNano();
@@ -274,7 +309,7 @@ UdfpsSensor::UdfpsSensor(int32_t sensorHandle, ISensorsEventCallback* callback)
     mSensorInfo.power = 0;
     mSensorInfo.flags |= SensorFlagBits::WAKE_UP;
 
-    int rc = pipe(mWaitPipeFd);
+    int rc = pipe2(mWaitPipeFd, O_CLOEXEC | O_NONBLOCK);
     if (rc < 0) {
         mWaitPipeFd[0] = -1;
         mWaitPipeFd[1] = -1;
@@ -300,11 +335,10 @@ UdfpsSensor::UdfpsSensor(int32_t sensorHandle, ISensorsEventCallback* callback)
 }
 
 UdfpsSensor::~UdfpsSensor() {
-    {
-        std::lock_guard<std::mutex> lock(mRunMutex);
-        mStopThread = true;
-    }
-    interruptPoll();
+    stop();
+    if (mPollFd >= 0) close(mPollFd);
+    if (mWaitPipeFd[0] >= 0) close(mWaitPipeFd[0]);
+    if (mWaitPipeFd[1] >= 0) close(mWaitPipeFd[1]);
 }
 
 void UdfpsSensor::activate(bool enable) {
@@ -368,12 +402,12 @@ void UdfpsSensor::run() {
                 continue;
             }
 
+            if (mPolls[0].revents & POLLIN) drainPollWake(mWaitPipeFd[0]);
+            if (mStopThread || !mIsEnabled || mMode != OperationMode::NORMAL) continue;
+
             if ((mPolls[1].revents & (POLLERR | POLLPRI)) && readFpState(mPollFd, mScreenX, mScreenY)) {
                 mIsEnabled = false;
                 mCallback->postEvents(readEvents(), isWakeUpSensor());
-            } else if (mPolls[0].revents & POLLIN) {
-                char buf;
-                read(mWaitPipeFd[0], &buf, sizeof(buf));
             }
         }
     }
@@ -381,7 +415,7 @@ void UdfpsSensor::run() {
 
 std::vector<Event> UdfpsSensor::readEvents() {
     std::vector<Event> events;
-    Event event;
+    Event event{};
     event.sensorHandle = mSensorInfo.sensorHandle;
     event.sensorType = mSensorInfo.type;
     event.timestamp = ::android::elapsedRealtimeNano();
@@ -392,10 +426,7 @@ std::vector<Event> UdfpsSensor::readEvents() {
 }
 
 void UdfpsSensor::interruptPoll() {
-    if (mWaitPipeFd[1] < 0) return;
-
-    char c = '1';
-    write(mWaitPipeFd[1], &c, sizeof(c));
+    wakePoll(mWaitPipeFd[1]);
 }
 
 SingleTapSensor::SingleTapSensor(int32_t sensorHandle, ISensorsEventCallback* callback)
@@ -409,7 +440,7 @@ SingleTapSensor::SingleTapSensor(int32_t sensorHandle, ISensorsEventCallback* ca
     mSensorInfo.power = 0;
     mSensorInfo.flags |= SensorFlagBits::WAKE_UP;
 
-    int rc = pipe(mWaitPipeFd);
+    int rc = pipe2(mWaitPipeFd, O_CLOEXEC | O_NONBLOCK);
     if (rc < 0) {
         mWaitPipeFd[0] = -1;
         mWaitPipeFd[1] = -1;
@@ -435,11 +466,10 @@ SingleTapSensor::SingleTapSensor(int32_t sensorHandle, ISensorsEventCallback* ca
 }
 
 SingleTapSensor::~SingleTapSensor() {
-    {
-        std::lock_guard<std::mutex> lock(mRunMutex);
-        mStopThread = true;
-    }
-    interruptPoll();
+    stop();
+    if (mPollFd >= 0) close(mPollFd);
+    if (mWaitPipeFd[0] >= 0) close(mWaitPipeFd[0]);
+    if (mWaitPipeFd[1] >= 0) close(mWaitPipeFd[1]);
 }
 
 void SingleTapSensor::activate(bool enable) {
@@ -503,12 +533,12 @@ void SingleTapSensor::run() {
                 continue;
             }
 
+            if (mPolls[0].revents & POLLIN) drainPollWake(mWaitPipeFd[0]);
+            if (mStopThread || !mIsEnabled || mMode != OperationMode::NORMAL) continue;
+
             if ((mPolls[1].revents & (POLLERR | POLLPRI)) && readBool(mPollFd)) {
                 mIsEnabled = false;
                 mCallback->postEvents(readEvents(), isWakeUpSensor());
-            } else if (mPolls[0].revents & POLLIN) {
-                char buf;
-                read(mWaitPipeFd[0], &buf, sizeof(buf));
             }
         }
     }
@@ -516,7 +546,7 @@ void SingleTapSensor::run() {
 
 std::vector<Event> SingleTapSensor::readEvents() {
     std::vector<Event> events;
-    Event event;
+    Event event{};
     event.sensorHandle = mSensorInfo.sensorHandle;
     event.sensorType = mSensorInfo.type;
     event.timestamp = ::android::elapsedRealtimeNano();
@@ -525,10 +555,7 @@ std::vector<Event> SingleTapSensor::readEvents() {
 }
 
 void SingleTapSensor::interruptPoll() {
-    if (mWaitPipeFd[1] < 0) return;
-
-    char c = '1';
-    write(mWaitPipeFd[1], &c, sizeof(c));
+    wakePoll(mWaitPipeFd[1]);
 }
 
 }  // namespace implementation

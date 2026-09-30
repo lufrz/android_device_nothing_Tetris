@@ -21,6 +21,7 @@
 #include <poll.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -51,6 +52,9 @@ class Sensor {
     Sensor(int32_t sensorHandle, ISensorsEventCallback* callback);
     virtual ~Sensor();
 
+    // Start only after the most-derived constructor has finished.
+    void start();
+
     const SensorInfo& getSensorInfo() const;
     virtual void batch(int32_t samplingPeriodNs);
     virtual void activate(bool enable);
@@ -61,6 +65,9 @@ class Sensor {
     Result injectEvent(const Event& event);
 
   protected:
+    // Derived destructors must stop before releasing resources used by run().
+    void stop();
+    virtual void interruptPoll() {}
     virtual void run();
     virtual std::vector<Event> readEvents();
     static void startThread(Sensor* sensor);
@@ -72,7 +79,7 @@ class Sensor {
     int64_t mLastSampleTimeNs;
     SensorInfo mSensorInfo;
 
-    std::atomic_bool mStopThread;
+    std::atomic_bool mStopThread{false};
     std::condition_variable mWaitCV;
     std::mutex mRunMutex;
     std::thread mRunThread;
@@ -104,10 +111,10 @@ class UdfpsSensor : public OneShotSensor {
     virtual std::vector<Event> readEvents() override;
 
   private:
-    void interruptPoll();
+    void interruptPoll() override;
 
-    struct pollfd mPolls[2];
-    int mWaitPipeFd[2];
+    struct pollfd mPolls[2]{};
+    int mWaitPipeFd[2]{-1, -1};
     int mPollFd;
 
     int mScreenX;
@@ -127,10 +134,10 @@ class SingleTapSensor : public OneShotSensor {
     virtual std::vector<Event> readEvents() override;
 
   private:
-    void interruptPoll();
+    void interruptPoll() override;
 
-    struct pollfd mPolls[2];
-    int mWaitPipeFd[2];
+    struct pollfd mPolls[2]{};
+    int mWaitPipeFd[2]{-1, -1};
     int mPollFd;
 };
 
