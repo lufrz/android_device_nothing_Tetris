@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0 */
 #define LOG_TAG "TetrisUdfpsSurface"
 
+#include "IlluminationBufferCache.h"
 #include "IlluminationRaster.h"
 
 #include <jni.h>
@@ -37,6 +38,7 @@ using Clock = std::chrono::steady_clock;
 sp<SurfaceComposerClient> gClient;
 sp<SurfaceControl> gSurface;
 sp<GraphicBuffer> gBuffer;
+tetris::udfps::IlluminationBufferCache<sp<GraphicBuffer>> gBufferCache;
 std::atomic<int64_t> gGeneration{0};
 
 struct PresentState {
@@ -53,6 +55,8 @@ struct PresentState {
     int64_t committedMs = -1;
     int64_t completedMs = -1;
     int64_t fenceMs = -1;
+    bool bufferCacheHit = false;
+    size_t bufferCacheEntries = 0;
     std::string result = "preparing";
     bool completed = false;
     bool latched = false;
@@ -87,6 +91,8 @@ std::string diagnostics() {
             << " raster_ms=" << pending->rasterMs
             << " buffer_unlock_ms=" << pending->bufferUnlockMs
             << " surface_create_ms=" << pending->surfaceCreateMs
+            << " buffer_cache=" << (pending->bufferCacheHit ? "hit" : "miss")
+            << " cache_entries=" << pending->bufferCacheEntries
             << " submit_ms=" << pending->submittedMs
             << " commit_callback_ms=" << pending->committedMs
             << " complete_callback_ms=" << pending->completedMs
@@ -150,6 +156,7 @@ bool hide() {
     } else if (status == DEAD_OBJECT) {
         gClient.clear();
     }
+    if (!presented) gBufferCache.clear();
     std::ostringstream timing;
     timing << "started_uptime_ms="
            << std::chrono::duration_cast<std::chrono::milliseconds>(started.time_since_epoch()).count()
@@ -200,47 +207,62 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         gClient = sp<SurfaceComposerClient>::make();
         if (gClient->initCheck() != NO_ERROR) {
             gClient.clear();
+            gBufferCache.clear();
             ALOGE("Unable to connect to SurfaceFlinger");
             return failed("surfaceflinger_connection_failed");
         }
     }
     recordPhase(&PresentState::connectMs, phaseStarted);
-    phaseStarted = Clock::now();
-    gBuffer = sp<GraphicBuffer>::make(width, height, PIXEL_FORMAT_RGBA_8888, 1,
-            GRALLOC_USAGE_SW_WRITE_OFTEN | GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_TEXTURE,
-            "NTFingerprintDimLayer");
-    if (gBuffer->initCheck() != NO_ERROR) {
-        ALOGE("Unable to allocate illumination buffer");
-        gBuffer.clear();
-        return failed("buffer_allocation_failed");
+    const tetris::udfps::IlluminationBufferKey key{width, height, cx, cy, rx, ry, opacity};
+    gBuffer = gBufferCache.find(key);
+    {
+        std::lock_guard lock(pending->mutex);
+        pending->bufferCacheHit = gBuffer != nullptr;
+        pending->bufferPrepareMs = pending->rasterMs = pending->bufferUnlockMs = 0;
     }
-    // The MTK composer reads gralloc NAME, not the SurfaceControl debug name, to
-    // place HBM_ENABLE in the atomic commit carrying this buffer (also with GPU composition).
-    std::string bufferName;
-    if (GraphicBufferMapper::get().getName(gBuffer->handle, &bufferName) != NO_ERROR
-            || bufferName.find("NTFingerprintDimLayer") == std::string::npos) {
-        gBuffer.clear();
-        return failed("missing_composer_buffer_marker");
+    if (gBuffer == nullptr) {
+        phaseStarted = Clock::now();
+        gBuffer = sp<GraphicBuffer>::make(width, height, PIXEL_FORMAT_RGBA_8888, 1,
+                GRALLOC_USAGE_SW_WRITE_OFTEN | GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_TEXTURE,
+                "NTFingerprintDimLayer");
+        if (gBuffer->initCheck() != NO_ERROR) {
+            ALOGE("Unable to allocate illumination buffer");
+            gBuffer.clear();
+            return failed("buffer_allocation_failed");
+        }
+        // The MTK composer reads gralloc NAME, not the SurfaceControl debug name, to
+        // place HBM_ENABLE in the atomic commit carrying this buffer (also with GPU composition).
+        std::string bufferName;
+        if (GraphicBufferMapper::get().getName(gBuffer->handle, &bufferName) != NO_ERROR
+                || bufferName.find("NTFingerprintDimLayer") == std::string::npos) {
+            gBuffer.clear();
+            return failed("missing_composer_buffer_marker");
+        }
+        void* address = nullptr;
+        if (gBuffer->lock(GRALLOC_USAGE_SW_WRITE_OFTEN, &address) != NO_ERROR || address == nullptr) {
+            gBuffer.clear();
+            return failed("buffer_lock_failed");
+        }
+        recordPhase(&PresentState::bufferPrepareMs, phaseStarted);
+        phaseStarted = Clock::now();
+        tetris::udfps::fillIllumination(static_cast<uint8_t*>(address), width, height,
+                                      gBuffer->getStride(), cx, cy, rx, ry, opacity);
+        recordPhase(&PresentState::rasterMs, phaseStarted);
+        phaseStarted = Clock::now();
+        if (gBuffer->unlock() != NO_ERROR) {
+            gBuffer.clear();
+            return failed("buffer_unlock_failed");
+        }
+        recordPhase(&PresentState::bufferUnlockMs, phaseStarted);
     }
-    void* address = nullptr;
-    if (gBuffer->lock(GRALLOC_USAGE_SW_WRITE_OFTEN, &address) != NO_ERROR || address == nullptr) {
-        gBuffer.clear();
-        return failed("buffer_lock_failed");
-    }
-    recordPhase(&PresentState::bufferPrepareMs, phaseStarted);
-    phaseStarted = Clock::now();
-    tetris::udfps::fillIllumination(static_cast<uint8_t*>(address), width, height,
-                                  gBuffer->getStride(), cx, cy, rx, ry, opacity);
-    recordPhase(&PresentState::rasterMs, phaseStarted);
-    phaseStarted = Clock::now();
-    if (gBuffer->unlock() != NO_ERROR) {
-        gBuffer.clear();
-        return failed("buffer_unlock_failed");
-    }
-    recordPhase(&PresentState::bufferUnlockMs, phaseStarted);
     if (!current()) {
         hide();
         return failed("cancelled_after_prepare");
+    }
+    gBufferCache.insert(key, gBuffer);
+    {
+        std::lock_guard lock(pending->mutex);
+        pending->bufferCacheEntries = gBufferCache.size();
     }
     phaseStarted = Clock::now();
     gSurface = gClient->createSurface(String8("NTFingerprintDimLayer Tetris"), width, height,
@@ -251,6 +273,7 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         hide();
         // A dead SurfaceFlinger invalidates the connection; reconnect on the next attempt.
         gClient.clear();
+        gBufferCache.clear();
         return failed("surface_creation_failed");
     }
     recordPhase(&PresentState::surfaceCreateMs, phaseStarted);
@@ -298,7 +321,10 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
     if (status != NO_ERROR) {
         ALOGE("Illumination transaction failed: %d", status);
         hide();
-        if (status == DEAD_OBJECT) gClient.clear();
+        if (status == DEAD_OBJECT) {
+            gClient.clear();
+            gBufferCache.clear();
+        }
         return failed("transaction_failed:" + std::to_string(status));
     }
     std::unique_lock lock(pending->mutex);

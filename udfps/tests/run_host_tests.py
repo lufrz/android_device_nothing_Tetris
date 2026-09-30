@@ -34,13 +34,16 @@ with tempfile.TemporaryDirectory(prefix="tetris-udfps-tests-") as temporary:
     compiler = os.environ.get("CXX") or shutil.which("c++")
     if not compiler:
         raise RuntimeError("A C++17 compiler is required for raster tests")
-    raster_test = temp / "raster_test"
-    subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror",
-                    "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
-                    "-I", str(module / "jni"),
-                    str(module / "tests/IlluminationRasterTest.cpp"),
-                    "-o", str(raster_test)], check=True)
-    subprocess.run([str(raster_test)], check=True)
+    for name in ("IlluminationRasterTest", "IlluminationBufferCacheTest"):
+        native_test = temp / name
+        subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+                        "-I", str(module / "jni"),
+                        str(module / ("tests/" + name + ".cpp")),
+                        "-o", str(native_test)], check=True)
+        subprocess.run([str(native_test)], check=True)
 
 subprocess.run([sys.executable, str(module / "tests/run_lifecycle_tests.py")], check=True)
 subprocess.run([sys.executable, str(module / "tests/run_sensor_lifecycle_tests.py")], check=True)
+
+subprocess.run([sys.executable, str(module / "tests/run_native_cache_tests.py")], check=True)
