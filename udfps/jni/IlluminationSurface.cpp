@@ -41,6 +41,58 @@ sp<GraphicBuffer> gBuffer;
 tetris::udfps::IlluminationBufferCache<sp<GraphicBuffer>> gBufferCache;
 std::atomic<int64_t> gGeneration{0};
 
+// The background producer never touches the compositor or the worker-owned cache.
+// Only a complete immutable buffer crosses this lock. Buffer destruction stays
+// outside it because gralloc/free and libgui cache callbacks can perform Binder I/O.
+using BufferKey = tetris::udfps::IlluminationBufferKey;
+struct PreparedBuffer {
+    BufferKey key{};
+    sp<GraphicBuffer> buffer;
+    int64_t elapsedMs = 0;
+    int64_t rasterMs = 0;
+};
+struct PreparationState {
+    uint64_t token = 0;
+    int64_t elapsedMs = 0;
+    int64_t rasterMs = 0;
+    const char* result = "none";
+};
+std::mutex gPreparationMutex;
+std::atomic<uint64_t> gPreparationEpoch{0};
+PreparedBuffer gPreparedBuffer;
+PreparationState gLastPreparation;
+
+uint64_t cancelPreparation(bool clearCompleted = false) {
+    PreparedBuffer discarded;
+    uint64_t token;
+    {
+        std::lock_guard lock(gPreparationMutex);
+        token = gPreparationEpoch.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (clearCompleted) std::swap(discarded, gPreparedBuffer);
+    }
+    return token;
+}
+
+bool validKey(const BufferKey& key) {
+    return key.width > 0 && key.height > 0 && key.width <= 4096 && key.height <= 4096
+            && std::isfinite(key.opacity) && key.opacity >= 0 && key.opacity <= 1
+            && std::isfinite(key.cx) && std::isfinite(key.cy) && std::isfinite(key.rx)
+            && std::isfinite(key.ry) && key.rx > 0 && key.ry > 0
+            && key.cx - key.rx >= 0 && key.cy - key.ry >= 0
+            && key.cx + key.rx <= key.width && key.cy + key.ry <= key.height;
+}
+
+PreparedBuffer takePreparedBuffer(const BufferKey& key) {
+    PreparedBuffer ready;
+    {
+        std::lock_guard lock(gPreparationMutex);
+        if (gPreparedBuffer.buffer != nullptr && gPreparedBuffer.key == key) {
+            std::swap(ready, gPreparedBuffer);
+        }
+    }
+    return ready;
+}
+
 struct PresentState {
     std::mutex mutex;
     std::condition_variable condition;
@@ -56,6 +108,9 @@ struct PresentState {
     int64_t completedMs = -1;
     int64_t fenceMs = -1;
     bool bufferCacheHit = false;
+    bool bufferPrepared = false;
+    int64_t preparedElapsedMs = 0;
+    int64_t preparedRasterMs = 0;
     size_t bufferCacheEntries = 0;
     std::string result = "preparing";
     bool completed = false;
@@ -69,6 +124,59 @@ std::string gLastHide = "none";
 
 int64_t elapsedMs(Clock::time_point since) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - since).count();
+}
+
+bool prepareBuffer(const BufferKey& key, uint64_t token) {
+    const auto started = Clock::now();
+    int64_t rasterMs = 0;
+    const auto current = [token] {
+        return token != 0 && gPreparationEpoch.load(std::memory_order_relaxed) == token;
+    };
+    const auto finish = [&](const char* result) {
+        std::lock_guard lock(gPreparationMutex);
+        gLastPreparation = {token, elapsedMs(started), rasterMs, result};
+        return false;
+    };
+    if (!validKey(key)) return finish("invalid_geometry");
+    if (!current()) return finish("cancelled_before_prepare");
+    auto buffer = sp<GraphicBuffer>::make(key.width, key.height, PIXEL_FORMAT_RGBA_8888, 1,
+            GRALLOC_USAGE_SW_WRITE_OFTEN | GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_TEXTURE,
+            "NTFingerprintDimLayer");
+    if (buffer->initCheck() != NO_ERROR) return finish("buffer_allocation_failed");
+    if (!current()) return finish("cancelled_after_allocation");
+    std::string bufferName;
+    if (GraphicBufferMapper::get().getName(buffer->handle, &bufferName) != NO_ERROR
+            || bufferName.find("NTFingerprintDimLayer") == std::string::npos) {
+        return finish("missing_composer_buffer_marker");
+    }
+    void* address = nullptr;
+    const status_t locked = buffer->lock(GRALLOC_USAGE_SW_WRITE_OFTEN, &address);
+    if (locked != NO_ERROR) return finish("buffer_lock_failed");
+    if (address == nullptr) {
+        buffer->unlock();
+        return finish("buffer_lock_failed");
+    }
+    const auto rasterStarted = Clock::now();
+    const bool complete = tetris::udfps::fillIlluminationCancellable(
+            static_cast<uint8_t*>(address), key.width, key.height, buffer->getStride(),
+            key.cx, key.cy, key.rx, key.ry, key.opacity, current);
+    rasterMs = elapsedMs(rasterStarted);
+    const status_t unlocked = buffer->unlock();
+    if (unlocked != NO_ERROR) return finish("buffer_unlock_failed");
+    if (!complete || !current()) return finish("cancelled_during_prepare");
+    PreparedBuffer ready{key, buffer, elapsedMs(started), rasterMs};
+    {
+        std::lock_guard lock(gPreparationMutex);
+        // Serialize the final epoch check and publication with cancellation and
+        // invalidation. An older producer cannot republish after a failed hide.
+        if (!current()) {
+            gLastPreparation = {token, elapsedMs(started), rasterMs, "cancelled_before_publish"};
+            return false;
+        }
+        std::swap(ready, gPreparedBuffer);
+        gLastPreparation = {token, elapsedMs(started), rasterMs, "prepared"};
+    }
+    return true;
 }
 
 std::string diagnostics() {
@@ -92,6 +200,10 @@ std::string diagnostics() {
             << " buffer_unlock_ms=" << pending->bufferUnlockMs
             << " surface_create_ms=" << pending->surfaceCreateMs
             << " buffer_cache=" << (pending->bufferCacheHit ? "hit" : "miss")
+            << " buffer_origin=" << (pending->bufferCacheHit ? "cache"
+                    : pending->bufferPrepared ? "prepared" : "rendered")
+            << " prepared_elapsed_ms=" << pending->preparedElapsedMs
+            << " prepared_raster_ms=" << pending->preparedRasterMs
             << " cache_entries=" << pending->bufferCacheEntries
             << " submit_ms=" << pending->submittedMs
             << " commit_callback_ms=" << pending->committedMs
@@ -101,6 +213,16 @@ std::string diagnostics() {
         out << "presentation=none";
     }
     out << " hide={" << lastHide << "}";
+    PreparationState preparation;
+    bool ready;
+    {
+        std::lock_guard lock(gPreparationMutex);
+        preparation = gLastPreparation;
+        ready = gPreparedBuffer.buffer != nullptr;
+    }
+    out << " preparation={token=" << preparation.token << " result=" << preparation.result
+        << " elapsed_ms=" << preparation.elapsedMs << " raster_ms=" << preparation.rasterMs
+        << " ready=" << ready << "}";
     return out.str();
 }
 
@@ -156,7 +278,10 @@ bool hide() {
     } else if (status == DEAD_OBJECT) {
         gClient.clear();
     }
-    if (!presented) gBufferCache.clear();
+    if (!presented) {
+        gBufferCache.clear();
+        cancelPreparation(true);
+    }
     std::ostringstream timing;
     timing << "started_uptime_ms="
            << std::chrono::duration_cast<std::chrono::milliseconds>(started.time_since_epoch()).count()
@@ -189,11 +314,8 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
     };
     if (!hide()) return failed("previous_surface_removal_failed");
     if (!current()) return failed("cancelled_before_prepare");
-    if (width <= 0 || height <= 0 || width > 4096 || height > 4096 || layerStack < 0
-            || !std::isfinite(opacity) || opacity < 0 || opacity > 1
-            || !std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(rx)
-            || !std::isfinite(ry) || rx <= 0 || ry <= 0
-            || cx - rx < 0 || cy - ry < 0 || cx + rx > width || cy + ry > height) {
+    const BufferKey key{width, height, cx, cy, rx, ry, opacity};
+    if (layerStack < 0 || !validKey(key)) {
         ALOGE("Invalid illumination buffer geometry");
         return failed("invalid_geometry");
     }
@@ -208,17 +330,27 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         if (gClient->initCheck() != NO_ERROR) {
             gClient.clear();
             gBufferCache.clear();
+            cancelPreparation(true);
             ALOGE("Unable to connect to SurfaceFlinger");
             return failed("surfaceflinger_connection_failed");
         }
     }
     recordPhase(&PresentState::connectMs, phaseStarted);
-    const tetris::udfps::IlluminationBufferKey key{width, height, cx, cy, rx, ry, opacity};
     gBuffer = gBufferCache.find(key);
     {
         std::lock_guard lock(pending->mutex);
         pending->bufferCacheHit = gBuffer != nullptr;
         pending->bufferPrepareMs = pending->rasterMs = pending->bufferUnlockMs = 0;
+    }
+    if (gBuffer == nullptr) {
+        auto ready = takePreparedBuffer(key);
+        if (ready.buffer != nullptr) {
+            gBuffer = std::move(ready.buffer);
+            std::lock_guard lock(pending->mutex);
+            pending->bufferPrepared = true;
+            pending->preparedElapsedMs = ready.elapsedMs;
+            pending->preparedRasterMs = ready.rasterMs;
+        }
     }
     if (gBuffer == nullptr) {
         phaseStarted = Clock::now();
@@ -274,6 +406,7 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         // A dead SurfaceFlinger invalidates the connection; reconnect on the next attempt.
         gClient.clear();
         gBufferCache.clear();
+        cancelPreparation(true);
         return failed("surface_creation_failed");
     }
     recordPhase(&PresentState::surfaceCreateMs, phaseStarted);
@@ -324,6 +457,7 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         if (status == DEAD_OBJECT) {
             gClient.clear();
             gBufferCache.clear();
+            cancelPreparation(true);
         }
         return failed("transaction_failed:" + std::to_string(status));
     }
@@ -388,6 +522,32 @@ extern "C" JNIEXPORT void JNICALL
 Java_org_lineageos_tetris_udfps_IlluminationApplication_nativeSetGeneration(
         JNIEnv*, jclass, jlong generation) {
     gGeneration.store(generation, std::memory_order_relaxed);
+    cancelPreparation();
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_lineageos_tetris_udfps_IlluminationApplication_nativeCancelPreparation(JNIEnv*, jclass) {
+    return static_cast<jlong>(cancelPreparation());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_lineageos_tetris_udfps_IlluminationApplication_nativeHasBuffer(
+        JNIEnv*, jclass, jint width, jint height, jfloat x, jfloat y,
+        jfloat radiusX, jfloat radiusY, jfloat alpha) {
+    const BufferKey key{width, height, x, y, radiusX, radiusY, alpha};
+    if (!validKey(key)) return false;
+    if (gBufferCache.find(key) != nullptr) return true;
+    std::lock_guard lock(gPreparationMutex);
+    return gPreparedBuffer.buffer != nullptr && gPreparedBuffer.key == key;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_org_lineageos_tetris_udfps_IlluminationApplication_nativePrepareBuffer(
+        JNIEnv*, jclass, jint width, jint height, jfloat x, jfloat y,
+        jfloat radiusX, jfloat radiusY, jfloat alpha, jlong token) {
+    if (token <= 0) return false;
+    return prepareBuffer({width, height, x, y, radiusX, radiusY, alpha},
+                         static_cast<uint64_t>(token));
 }
 
 extern "C" JNIEXPORT jstring JNICALL

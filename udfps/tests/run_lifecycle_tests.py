@@ -34,14 +34,27 @@ app, count = re.subn(
     r'    private static native boolean nativeShow\(.*?long generation\);',
     '    private static boolean nativeShow(int width, int height, int layerStack, float x,\n'
     '            float y, float radiusX, float radiusY, float alpha, long generation) {\n'
-    '        if(generation!=TestHooks.generation)return false; TestHooks.shows++; TestHooks.events.add("show:"+TestHooks.contextMode); TestHooks.shownModes.add(TestHooks.contextMode); TestHooks.hbm=true; TestHooks.afterShow.run(); return true;\n    }', app, flags=re.S)
+    '        if(generation!=TestHooks.generation)return false; TestHooks.shows++; TestHooks.onShow(width,height,x,y,radiusX,radiusY,alpha); TestHooks.events.add("show:"+TestHooks.contextMode); TestHooks.shownModes.add(TestHooks.contextMode); TestHooks.hbm=true; TestHooks.afterShow.run(); return true;\n    }', app, flags=re.S)
 assert count == 1, "Update the JNI test hook for the changed app"
 app = app.replace('private static native void nativeSetGeneration(long generation);',
-                  'private static void nativeSetGeneration(long generation) { TestHooks.generation=generation; }')
+                  'private static void nativeSetGeneration(long generation) { TestHooks.generation=generation; TestHooks.cancelPreparation(); }')
 app = app.replace('private static native boolean nativeHide();',
-                  'private static boolean nativeHide() { TestHooks.hides++; TestHooks.events.add("hide"); TestHooks.hbm=false; return TestHooks.hideSucceeded; }')
+                  'private static boolean nativeHide() { TestHooks.hides++; TestHooks.events.add("hide"); TestHooks.hbm=false; TestHooks.afterHide.run(); return TestHooks.hideSucceeded; }')
 app = app.replace('private static native String nativeGetDiagnostics();',
                   'private static String nativeGetDiagnostics() { return "host fixture"; }')
+app = app.replace('private static native long nativeCancelPreparation();',
+                  'private static long nativeCancelPreparation() { return TestHooks.cancelPreparation(); }')
+app, count_has = re.subn(
+    r'    private static native boolean nativeHasBuffer\(.*?\);',
+    '    private static boolean nativeHasBuffer(int width, int height, float x, float y,\n'
+    '            float radiusX, float radiusY, float alpha) {\n'
+    '        return TestHooks.hasBuffer(width,height,x,y,radiusX,radiusY,alpha);\n    }', app, flags=re.S)
+app, count_prepare = re.subn(
+    r'    private static native boolean nativePrepareBuffer\(.*?\);',
+    '    private static boolean nativePrepareBuffer(int width, int height, float x, float y,\n'
+    '            float radiusX, float radiusY, float alpha, long token) {\n'
+    '        return TestHooks.prepare(width,height,x,y,radiusX,radiusY,alpha,token);\n    }', app, flags=re.S)
+assert count_has <= 1 and count_prepare <= 1, "Duplicate preparation entry point"
 assert 'private static native ' not in app, "Unmocked JNI entry point"
 
 stubs = {
@@ -51,7 +64,7 @@ stubs = {
  public class PackageManager { public static final int PERMISSION_GRANTED=0; }''',
 "android/content/res/Resources.java": '''package android.content.res;
  public class Resources { public int[] getIntArray(int id) { int[] a=new int[256];
- java.util.Arrays.fill(a,128); return a; } public int getInteger(int id) {
+ for(int i=0;i<a.length;i++)a[i]=i; return a; } public int getInteger(int id) {
  return switch(id) { case 1 -> 256; case 2 -> 2680; case 3 -> 4095; default -> 4; }; }}''',
 "android/app/Application.java": '''package android.app;
  public class Application { public static final java.util.Map<Class<?>,Object> services = new java.util.HashMap<>();
@@ -70,25 +83,36 @@ stubs = {
  public boolean unlinkToDeath(DeathRecipient recipient,int flags) { return true; }
  public final void dumpForTest(java.io.PrintWriter out) { dump(null,out,new String[0]); }
  protected void dump(java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args) {} }''',
-"android/os/Process.java": 'package android.os; public class Process { public static final int SYSTEM_UID=1000; }',
+"android/os/Process.java": 'package android.os; public class Process { public static final int SYSTEM_UID=1000,THREAD_PRIORITY_BACKGROUND=10; }',
 "android/os/UserHandle.java": '''package android.os; public class UserHandle {
  public static final int USER_SYSTEM=0; public static int myUserId() { return 0; }}''',
 "android/os/SystemClock.java": '''package android.os; public class SystemClock {
  public static long now; public static long uptimeMillis() { return now; }}''',
 "android/os/HandlerThread.java": '''package android.os; public class HandlerThread {
- public HandlerThread(String name) {} public void start() {} public Object getLooper() { return this; }}''',
+ public final String name;public final int priority;
+ public HandlerThread(String name) { this(name,0); } public HandlerThread(String name,int priority) {this.name=name;this.priority=priority;}
+ public void start() {} public Object getLooper() { return this; }}''',
 "android/os/Handler.java": '''package android.os; public class Handler {
- private record Task(long at,long order,Runnable task) implements Comparable<Task> {
+ private record Task(long at,long order,Handler owner,Runnable task) implements Comparable<Task> {
  public int compareTo(Task t) { int c=Long.compare(at,t.at); return c!=0?c:Long.compare(order,t.order); }}
  private static final java.util.PriorityQueue<Task> queue=new java.util.PriorityQueue<>();
- private static long order; public Handler(Object looper) {}
+ private static long order;private final boolean background;public static boolean inBackground;
+ public Handler(Object looper) { background=looper instanceof HandlerThread t&&t.priority==Process.THREAD_PRIORITY_BACKGROUND; }
  public boolean post(Runnable r) { return postAtTime(r,SystemClock.now); }
  public boolean postDelayed(Runnable r,long delay) { return postAtTime(r,SystemClock.now+delay); }
- public boolean postAtTime(Runnable r,long at) { queue.add(new Task(at,order++,r)); return true; }
- public static void reset() { queue.clear(); SystemClock.now=0; }
- public static void runDue() { int guard=1000; while(!queue.isEmpty()&&queue.peek().at<=SystemClock.now) {
- if(--guard==0) throw new AssertionError("worker failed to yield"); queue.remove().task.run(); }}
- public static void advance(long delta) { SystemClock.now+=delta; runDue(); }}''',
+ public boolean postAtTime(Runnable r,long at) { queue.add(new Task(at,order++,this,r)); return true; }
+ public void removeCallbacks(Runnable r) { queue.removeIf(t->t.owner==this&&t.task==r); }
+ public static void reset() { queue.clear();SystemClock.now=0;order=0;inBackground=false; }
+ private static Task next(boolean background,boolean dueOnly) { return queue.stream()
+  .filter(t->t.owner.background==background&&(!dueOnly||t.at<=SystemClock.now)).min(Task::compareTo).orElse(null); }
+ public static boolean runOne(boolean background) { Task t=next(background,true);if(t==null)return false;
+  queue.remove(t);boolean previous=inBackground;inBackground=background;try{t.task.run();}finally{inBackground=previous;}return true; }
+ public static void runDue() { int guard=1000;while(runOne(false)) {
+  if(--guard==0)throw new AssertionError("worker failed to yield"); }}
+ public static boolean runOneBackground() { return runOne(true); }
+ public static int backgroundPending() { return (int)queue.stream().filter(t->t.owner.background).count(); }
+ public static int foregroundPending() { return (int)queue.stream().filter(t->!t.owner.background).count(); }
+ public static void advance(long delta) { SystemClock.now+=delta;runDue(); }}''',
 "android/os/ServiceManager.java": '''package android.os; public class ServiceManager {
  public static Object service; public static void addService(String n,Object s,boolean isolated) { service=s; }}''',
 "android/os/PowerManager.java": '''package android.os; public class PowerManager {
@@ -113,29 +137,32 @@ stubs = {
 "android/view/Display.java": '''package android.view; public class Display {
  public static final int DEFAULT_DISPLAY=0,STATE_UNKNOWN=0,STATE_OFF=1,STATE_ON=2,STATE_DOZE=3,
  STATE_DOZE_SUSPEND=4,STATE_ON_SUSPEND=6; public int state=STATE_ON,committedState=STATE_ON;
- public boolean transitionToOffAtRead;
+ public boolean transitionToOffAtRead;public int width=1080,height=2400,rotation;
+ public float brightness=.4f;public boolean missingBrightnessInfo;
  public boolean getDisplayInfo(DisplayInfo info) { if(transitionToOffAtRead){state=STATE_OFF;transitionToOffAtRead=false;}
  info.state=state;info.committedState=committedState;return true; }
  public int getCommittedState() { return committedState; }
  public int getState() { int previous=state;if(transitionToOffAtRead){state=STATE_OFF;transitionToOffAtRead=false;}return previous; }
  public static String stateToString(int state) { return "state"+state; }
- public void getRealSize(android.graphics.Point p) { p.x=1080;p.y=2400; }
- public int getRotation() { return 0; } public int getLayerStack() { return 0; }
+ public void getRealSize(android.graphics.Point p) { p.x=width;p.y=height; }
+ public int getRotation() { return rotation; } public int getLayerStack() { return 0; }
  public float getRefreshRate() { return 120; }
- public android.hardware.display.BrightnessInfo getBrightnessInfo() { return new android.hardware.display.BrightnessInfo(); }}''',
+ public android.hardware.display.BrightnessInfo getBrightnessInfo() { if(missingBrightnessInfo)return null;var info=new android.hardware.display.BrightnessInfo();info.adjustedBrightness=brightness;return info; }}''',
 "android/hardware/display/DisplayManager.java": '''package android.hardware.display;
  public class DisplayManager { public final android.view.Display display=new android.view.Display();
  public static final long EVENT_TYPE_DISPLAY_ADDED=1,EVENT_TYPE_DISPLAY_CHANGED=4,
- EVENT_TYPE_DISPLAY_REMOVED=2,EVENT_TYPE_DISPLAY_STATE=16,EVENT_TYPE_DISPLAY_REFRESH_RATE=8,
+ EVENT_TYPE_DISPLAY_REMOVED=2,EVENT_TYPE_DISPLAY_STATE=16,EVENT_TYPE_DISPLAY_REFRESH_RATE=8,EVENT_TYPE_DISPLAY_BRIGHTNESS=32,
  PRIVATE_EVENT_TYPE_DISPLAY_COMMITTED_STATE_CHANGED=4;
  public long publicEvents,privateEvents;public int committedOnlyCallbacks;
  private DisplayListener listener; private android.os.Handler handler;
  public interface DisplayListener { void onDisplayAdded(int id);void onDisplayRemoved(int id);void onDisplayChanged(int id); }
- public android.view.Display getDisplay(int id) { return display; } public float getBrightness(int id) { return .4f; }
+ public android.view.Display getDisplay(int id) { return display; } public float fallbackBrightness=.4f; public float getBrightness(int id) { return fallbackBrightness; }
  public void registerDisplayListener(DisplayListener l,android.os.Handler h) {
  registerDisplayListener(l,h,EVENT_TYPE_DISPLAY_ADDED|EVENT_TYPE_DISPLAY_CHANGED|EVENT_TYPE_DISPLAY_REMOVED,0); }
  public void registerDisplayListener(DisplayListener l,android.os.Handler h,long events,long privateFlags) {
  listener=l;handler=h;publicEvents=events;privateEvents=privateFlags; }
+ public void brightness(float value) { display.brightness=value;
+ if((publicEvents&EVENT_TYPE_DISPLAY_BRIGHTNESS)!=0)handler.post(()->listener.onDisplayChanged(0)); }
  public void request(int state) { display.state=state;
  if((publicEvents&EVENT_TYPE_DISPLAY_STATE)!=0)handler.post(()->listener.onDisplayChanged(0)); }
  public void commit(int state) { display.committedState=state;
@@ -155,10 +182,30 @@ stubs = {
  config_udfpsMtkGhbmNormalMaxBacklight=2,config_udfpsMtkGhbmMaxBacklight=3,config_udfpsMtkGhbmMinBacklight=4; }}''',
 "org/lineageos/tetris/udfps/TestHooks.java": '''package org.lineageos.tetris.udfps;
  final class TestHooks { static int shows,hides;static boolean hbm,ui,hideSucceeded;
- static Runnable afterShow,afterContext;static int timingReads;static String timingMode;
+ static Runnable afterShow,afterContext,afterPrepare,afterHide;static int timingReads;static String timingMode;
  static String contextMode="none",contextFault="none";static long contextToken,generation;static int contextBegins,contextEnds;
  static boolean failReset;static final java.util.List<String> events=new java.util.ArrayList<>();
  static final java.util.List<String> shownModes=new java.util.ArrayList<>();
+ record BufferKey(int width,int height,float x,float y,float rx,float ry,float alpha) {}
+ static final java.util.List<BufferKey> cache=new java.util.ArrayList<>();
+ static final java.util.List<BufferKey> prepareKeys=new java.util.ArrayList<>();
+ static final java.util.List<Long> prepareStarts=new java.util.ArrayList<>();
+ static long prepareEpoch;static int prepareCalls,prepareHits;static String prepareFault="none";static BufferKey readyKey;
+ static long cancelPreparation(){return ++prepareEpoch;}
+ static boolean hasBuffer(int w,int h,float x,float y,float rx,float ry,float a){
+  BufferKey key=new BufferKey(w,h,x,y,rx,ry,a);return key.equals(readyKey)||cache.contains(key);}
+ static boolean prepare(int w,int h,float x,float y,float rx,float ry,float a,long token){
+  if(!HandlerBackground())throw new AssertionError("preparation must run on its dedicated background looper");
+  if(token!=prepareEpoch)return false;
+  prepareCalls++;prepareKeys.add(new BufferKey(w,h,x,y,rx,ry,a));prepareStarts.add(android.os.SystemClock.now);
+  if(prepareFault.equals("throw"))throw new IllegalStateException("injected preparation error");
+  afterPrepare.run();if(token!=prepareEpoch||prepareFault.equals("fail"))return false;
+  readyKey=new BufferKey(w,h,x,y,rx,ry,a);return true;}
+ static boolean HandlerBackground(){return android.os.Handler.inBackground;}
+ static void onShow(int w,int h,float x,float y,float rx,float ry,float a){
+  if(HandlerBackground())throw new AssertionError("show must not run on the preparer");
+  BufferKey key=new BufferKey(w,h,x,y,rx,ry,a);if(key.equals(readyKey)){prepareHits++;readyKey=null;}
+  cache.remove(key);cache.add(0,key);while(cache.size()>2)cache.remove(cache.size()-1);}
  static void context(String command) throws java.io.IOException {
   events.add(command);String[] fields=command.trim().split(" ");
   if(fields.length<3||!fields[0].equals("scan_v1"))throw new AssertionError("unexpected context protocol");
@@ -177,7 +224,7 @@ stubs = {
   }else throw new AssertionError("unexpected operation");
  }
  static void reset() { shows=hides=timingReads=0;hbm=ui=false;hideSucceeded=true;
-  afterShow=afterContext=()->{};timingMode="missing";contextMode="none";contextFault="none";
+  afterShow=afterContext=afterPrepare=afterHide=()->{};prepareCalls=prepareHits=0;prepareEpoch=0;prepareFault="none";readyKey=null;cache.clear();prepareKeys.clear();prepareStarts.clear();timingMode="missing";contextMode="none";contextFault="none";
   contextToken=0;contextBegins=contextEnds=0;failReset=false;events.clear();shownModes.clear(); }
  static String readHbmTiming() throws java.io.IOException { timingReads++;
   if(timingMode.equals("missing"))throw new java.nio.file.NoSuchFileException("hbm_timing");
@@ -195,13 +242,13 @@ harness = '''package org.lineageos.tetris.udfps;
 import android.app.Application;import android.os.*;import android.view.Display;
 import android.hardware.display.DisplayManager;import vendor.nothing.hardware.udfps.*;
 public final class DisplayLifecycleTest {
- static PowerManager power;static DisplayManager displays;static IIllumination service;
+ static PowerManager power;static DisplayManager displays;static IIllumination service;static IlluminationApplication app;
  static class Client extends Binder implements IIlluminationCallback {
   int failures,links;IBinder.DeathRecipient death;public IBinder asBinder(){return this;}public void onFailure(){failures++;}
   @Override public void linkToDeath(IBinder.DeathRecipient recipient,int flags){links++;death=recipient;}
   @Override public boolean unlinkToDeath(IBinder.DeathRecipient recipient,int flags){if(death==recipient)death=null;return true;}
   void die(){IBinder.DeathRecipient d=death;if(d!=null)d.binderDied();}}
- static void check(boolean ok,String message){if(!ok)throw new AssertionError(message);}
+ static int assertions;static void check(boolean ok,String message){assertions++;if(!ok)throw new AssertionError(message);}
  static Client setup(int state){return setup(state,true);}
  static Client setup(int state,boolean powerAvailable){
   Handler.reset();TestHooks.reset();ServiceManager.service=null;service=null;power=new PowerManager();
@@ -210,7 +257,7 @@ public final class DisplayLifecycleTest {
   Application.services.clear();
   if(powerAvailable)Application.services.put(PowerManager.class,power);
   Application.services.put(DisplayManager.class,displays);
-  new IlluminationApplication().onCreate();Handler.runDue();service=(IIllumination)ServiceManager.service;
+  app=new IlluminationApplication();app.onCreate();Handler.runDue();service=(IIllumination)ServiceManager.service;
   check(service!=null,"startup must register a fresh illumination service");
   return new Client();}
  static void begin(Client client){service.begin(client,540,2109,93);}
@@ -452,7 +499,163 @@ public final class DisplayLifecycleTest {
   }
   System.out.println("PASS: scan context interactive/AOD origin, no upgrade, downgrade, cancellation, replacement, death, old-kernel fallback and ambiguous-write reset");
  }
+ static float expectedAlpha(float brightness){
+  android.content.res.Resources r=new android.content.res.Resources();
+  return new Calibration(r.getIntArray(0),256,2680,4095,4).alpha(brightness);}
+ static Client idleWithGeometry(){
+  Client c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
+  service.end(c);Handler.runDue();
+  check(!TestHooks.hbm&&!TestHooks.ui&&!power.lock.isHeld(),"preparation fixture requires completed cleanup");
+  return c;}
+ static void brightness(float value){displays.brightness(value);Handler.runDue();}
+ static void queuePreparation(float value){brightness(value);Handler.advance(200);
+  check(Handler.backgroundPending()==1,"one stable key must enqueue one background preparation");}
+ static void completePreparation(){check(Handler.runOneBackground(),"expected background preparation");Handler.runDue();}
+ static Object preparationKey(){try{
+  var method=IlluminationApplication.class.getDeclaredMethod("readPreparationKey");method.setAccessible(true);
+  return method.invoke(app);
+ }catch(ReflectiveOperationException e){throw new AssertionError(e);}}
+ static void preparationEligibility(){
+  Client c=setup(Display.STATE_ON);
+  check((displays.publicEvents&DisplayManager.EVENT_TYPE_DISPLAY_BRIGHTNESS)!=0,
+    "preparation must subscribe to brightness-only events");
+  brightness(.2f);Handler.advance(5000);
+  check(Handler.backgroundPending()==0&&TestHooks.prepareCalls==0&&TestHooks.shows==0,
+    "no speculative work before validated HAL geometry and power dependency are known");
+  try{service.begin(c,-1,2109,93);throw new AssertionError("invalid geometry accepted");}
+  catch(IllegalArgumentException expected){}
+  brightness(.3f);Handler.advance(2000);check(Handler.backgroundPending()==0,"invalid HAL geometry must not enable preparation");
+  idleWithGeometry();brightness(.2f);displays.request(Display.STATE_OFF);Handler.runDue();Handler.advance(2000);
+  check(Handler.backgroundPending()==0&&TestHooks.prepareCalls==0,"requested OFF cancels stable-key preparation");
+  idleWithGeometry();brightness(.2f);displays.commit(Display.STATE_OFF);Handler.runDue();Handler.advance(2000);
+  check(Handler.backgroundPending()==0,"uncommitted display cannot prepare");
+  idleWithGeometry();power.interactive=false;brightness(.2f);Handler.advance(2000);
+  check(Handler.backgroundPending()==0,"noninteractive pulse ON cannot speculate");
+  idleWithGeometry();displays.display.brightness=Float.NaN;displays.fallbackBrightness=Float.NaN;
+  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(2000);
+  check(Handler.backgroundPending()==0,"unknown adjusted and fallback brightness must not prepare an approximate alpha");
+  idleWithGeometry();power.failQueryAt=power.interactiveQueries+1;brightness(.2f);Handler.advance(2000);
+  check(Handler.backgroundPending()==0,"power query failure must skip optional preparation");
+  c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);brightness(.2f);Handler.advance(2000);
+  check(Handler.backgroundPending()==0&&TestHooks.prepareCalls==0&&TestHooks.ui,"active capture must never start preparation");
+  TestHooks.afterHide=()->{
+   check(preparationKey()==null,"owner-null cleanup must remain ineligible until hardware reset has finished");
+   displays.brightness(.3f);
+   check(Handler.backgroundPending()==0,"cleanup may not dispatch producer before finishing hide");};
+  service.end(c);Handler.runDue();TestHooks.afterHide=()->{};Handler.advance(200);
+  check(Handler.backgroundPending()==1,"preparation resumes only after successful completed cleanup");
+  c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
+  TestHooks.hideSucceeded=false;service.end(c);Handler.runDue();brightness(.2f);Handler.advance(2000);
+  check(Handler.backgroundPending()==0&&dump().contains("hardware reset failed"),
+    "failed cleanup must not become eligible merely because owner is null");
+  System.out.println("PASS: prewarm geometry/power/brightness/interactive/committed gates, active scan and cleanup exclusion");
+ }
+ static void preparationCoalescingAndReuse(){
+  idleWithGeometry();
+  for(int i=0;i<50;i++){brightness(.1f+i*.01f);Handler.advance(10);
+   check(Handler.backgroundPending()==0,"brightness animation must keep yielding until the key is stable");
+   check(Handler.foregroundPending()<=4,"brightness flood must replace its debounce callback instead of accumulating jobs");}
+  brightness(.6f);Handler.advance(199);check(Handler.backgroundPending()==0,"stable-key debounce is at least200ms");
+  Handler.advance(1);check(Handler.backgroundPending()==1&&TestHooks.prepareCalls==0,
+    "producer work must be isolated from the foreground worker queue");
+  completePreparation();
+  check(TestHooks.prepareCalls==1&&TestHooks.prepareKeys.get(0).alpha()==expectedAlpha(.6f),
+    "brightness flood must raster only its final exact calibrated alpha");
+  for(int i=0;i<30;i++)brightness(.600001f);
+  Handler.advance(2000);check(Handler.backgroundPending()==0&&TestHooks.prepareCalls==1,
+    "brightness changes mapping to the same alpha must reuse the completed immutable key");
+  Client next=new Client();int shows=TestHooks.shows;begin(next);Handler.runDue();Handler.advance(17);
+  check(TestHooks.shows==shows+1&&TestHooks.prepareHits==1&&TestHooks.ui&&next.failures==0,
+    "begin cancellation must preserve completed exact-key prewarm for normal show consumption");
+  service.end(next);Handler.runDue();
+  System.out.println("PASS: brightness flood coalescing,200ms stable key, background isolation, exact alpha and warm reuse across begin");
+ }
+ static void preparationTouchAndStaleCompletion(){
+  idleWithGeometry();queuePreparation(.2f);Client c=new Client();
+  begin(c);Handler.runDue();Handler.advance(17);
+  check(TestHooks.shows==2&&TestHooks.ui&&TestHooks.prepareCalls==0&&Handler.backgroundPending()==1,
+    "touch must show immediately without waiting for an undispatched producer");
+  completePreparation();check(TestHooks.prepareCalls==0&&TestHooks.ui&&c.failures==0,
+    "cancelled queued producer must not render or modify an active owner");
+  service.end(c);Handler.runDue();
+  idleWithGeometry();queuePreparation(.2f);Client during=new Client();
+  TestHooks.afterPrepare=()->{begin(during);Handler.runDue();Handler.advance(17);
+   check(TestHooks.shows==2&&TestHooks.ui,"touch during producer must use normal show without joining preparation");};
+  completePreparation();TestHooks.afterPrepare=()->{};
+  check(TestHooks.readyKey==null&&during.failures==0&&TestHooks.ui&&dump().contains("owner=true"),
+    "stale producer completion must not publish or clear active scan ownership");
+  service.end(during);Handler.runDue();
+  idleWithGeometry();queuePreparation(.2f);
+  TestHooks.afterPrepare=()->{brightness(.3f);Handler.advance(200);
+   check(Handler.backgroundPending()==0,"one running producer prevents scheduling a second while key changes");};
+  completePreparation();TestHooks.afterPrepare=()->{};
+  check(TestHooks.readyKey==null,"changed-key result must be discarded");
+  Handler.advance(799);check(Handler.backgroundPending()==0,"new key must respect1000ms start interval");
+  Handler.advance(1);check(Handler.backgroundPending()==1,"only latest key should follow cancelled completion");
+  completePreparation();
+  check(TestHooks.prepareCalls==2&&TestHooks.prepareKeys.get(1).alpha()==expectedAlpha(.3f)
+    &&TestHooks.prepareStarts.get(1)-TestHooks.prepareStarts.get(0)>=1000,
+    "coalesced retry must retain final alpha and minimum producer interval");
+  idleWithGeometry();queuePreparation(.2f);
+  TestHooks.afterPrepare=()->{displays.change(Display.STATE_OFF);Handler.runDue();};
+  completePreparation();TestHooks.afterPrepare=()->{};Handler.advance(2000);
+  check(TestHooks.readyKey==null&&Handler.backgroundPending()==0,"screen off must discard result and suppress rescheduling");
+  System.out.println("PASS: touch never waits for queued/running preparation, stale owner/key/off cancellation and latest-only rescheduling");
+ }
+ static void preparationDelayedWorkerRateLimit(){
+  idleWithGeometry();queuePreparation(.2f);
+  Handler.advance(1500);
+  TestHooks.afterPrepare=()->brightness(.3f);
+  completePreparation();TestHooks.afterPrepare=()->{};
+  check(TestHooks.prepareCalls==1&&TestHooks.readyKey==null,
+    "delayed producer must discard a key superseded while it runs");
+  Handler.advance(999);check(Handler.backgroundPending()==0,
+    "1000ms rate limit must start at actual background execution, not earlier dispatch");
+  Handler.advance(1);check(Handler.backgroundPending()==1,"latest key should resume after actual-start rate limit");
+  completePreparation();
+  check(TestHooks.prepareStarts.get(1)-TestHooks.prepareStarts.get(0)>=1000,
+    "two raster starts must remain at least1000ms apart even after background scheduling delay");
+  idleWithGeometry();queuePreparation(.2f);
+  for(int i=0;i<20;i++){brightness(.3f+i*.01f);Handler.advance(10);
+   check(Handler.backgroundPending()==1,"in-flight cancellation must retain one completion but never enqueue replacements");}
+  completePreparation();check(TestHooks.prepareCalls==0,"obsolete undispatched job must exit before raster");
+  Handler.advance(999);check(Handler.backgroundPending()==0,"cancelled-job completion retains interval budget");
+  Handler.advance(1);check(Handler.backgroundPending()==1,"only final pending key resumes after cancelled job");
+  completePreparation();check(TestHooks.prepareCalls==1&&TestHooks.prepareKeys.get(0).alpha()==expectedAlpha(.49f),
+    "many changes during a pending job must coalesce to exactly the latest key");
+  System.out.println("PASS: actual background-start rate limit after delayed dispatch and one pending latest key under cancellation flood");
+ }
+ static void preparationFailuresAndGeometry(){
+  for(String fault:new String[]{"fail","throw"}){
+   idleWithGeometry();TestHooks.prepareFault=fault;queuePreparation(.2f);completePreparation();
+   check(TestHooks.prepareCalls==1&&Handler.backgroundPending()==0,"optional native failure must return control");
+   for(int i=0;i<6;i++){brightness(.2f);Handler.advance(1000);}
+   check(TestHooks.prepareCalls==1&&Handler.backgroundPending()==0,
+    "same failed key must not cause a retry loop after "+fault);
+   TestHooks.prepareFault="none";queuePreparation(.3f);completePreparation();
+   check(TestHooks.prepareCalls==2&&TestHooks.readyKey!=null,"new key must recover after optional preparation failure");
+   Client c=new Client();begin(c);Handler.runDue();Handler.advance(17);
+   check(c.failures==0&&TestHooks.ui,"background failure must not poison normal scanning");service.end(c);Handler.runDue();
+  }
+  idleWithGeometry();displays.display.missingBrightnessInfo=true;displays.fallbackBrightness=.2f;
+  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(200);completePreparation();
+  check(TestHooks.prepareKeys.get(0).alpha()==expectedAlpha(.2f),"prewarm must share the normal brightness fallback");
+  idleWithGeometry();displays.display.width=2400;displays.display.height=1080;displays.display.rotation=1;
+  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(200);completePreparation();
+  TestHooks.BufferKey key=TestHooks.prepareKeys.get(0);
+  SensorGeometry geometry=new SensorGeometry(540,2109,93,2400,1080,1);
+  check(key.width()==2400&&key.height()==1080&&key.x()==geometry.x&&key.y()==geometry.y
+    &&key.rx()==geometry.radiusX&&key.ry()==geometry.radiusY,
+    "prewarm must transform learned physical HAL geometry exactly for display rotation");
+  brightness(.3f);Handler.advance(1000);completePreparation();
+  Client c=new Client();displays.display.rotation=3;begin(c);Handler.runDue();Handler.advance(17);
+  check(TestHooks.prepareHits==0&&c.failures==0&&TestHooks.ui,
+    "rotation mismatch must use normal rendering rather than a stale prepared shape");
+  System.out.println("PASS: optional producer errors do not crash or retry-spin, new-key recovery, fallback brightness and exact transformed geometry");
+ }
  public static void main(String[] args){
+  preparationEligibility();preparationCoalescingAndReuse();
+  preparationTouchAndStaleCompletion();preparationDelayedWorkerRateLimit();preparationFailuresAndGeometry();
   scanContextLifecycle();
   optionalHbmTiming();
   committedDisplayGate();
@@ -522,6 +725,7 @@ public final class DisplayLifecycleTest {
   displays.change(Display.STATE_OFF);Handler.runDue();
   check(newer.failures==1&&!power.lock.isHeld()&&power.wakes==0,"power-off during scan aborts without full wake");
   System.out.println("PASS: SystemUI-only display pulse, 500ms held-contact continuity, lift cancellation, timeout ownership, DOZE and bounded cleanup");
+  System.out.println("PASS: "+assertions+" assertions against the real Java application");
  }
 }'''
 

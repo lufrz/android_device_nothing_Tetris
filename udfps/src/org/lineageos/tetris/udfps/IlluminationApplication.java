@@ -43,8 +43,24 @@ public final class IlluminationApplication extends Application {
     private static final long DISPLAY_READY_TIMEOUT_MS = 2_000;
     private static final long WAKE_LOCK_TIMEOUT_MS = MAX_SCAN_MS + DISPLAY_READY_TIMEOUT_MS;
 
+    private static final long PREPARATION_QUIET_MS = 200;
+    private static final long PREPARATION_INTERVAL_MS = 1_000;
+
     private final Object mLock = new Object();
     private Handler mWorker;
+    private Handler mPreparationWorker;
+    // Scheduling fields are confined to mWorker. The producer only receives a
+    // frozen key/token and publishes immutable pixels through JNI.
+    private int mSensorX, mSensorY, mSensorRadius;
+    private PreparationKey mDesiredPreparation;
+    private PreparationKey mFailedPreparation;
+    private boolean mPreparationRunning;
+    private long mPreparationToken;
+    private long mPreparationStableSince;
+    private long mLastPreparationStartedAt = -PREPARATION_INTERVAL_MS;
+    private volatile String mPreparationState = "waiting for sensor geometry";
+    private volatile String mLastPreparation = "none";
+    private final Runnable mPrepareWhenStable = this::prepareWhenStable;
     private DisplayManager mDisplayManager;
     private PowerManager mPowerManager;
     private PowerManager.WakeLock mScanWakeLock;
@@ -85,18 +101,30 @@ public final class IlluminationApplication extends Application {
         HandlerThread thread = new HandlerThread("TetrisUdfpsIllumination");
         thread.start();
         mWorker = new Handler(thread.getLooper());
+        HandlerThread preparationThread = new HandlerThread("TetrisUdfpsPrepare",
+                Process.THREAD_PRIORITY_BACKGROUND);
+        preparationThread.start();
+        mPreparationWorker = new Handler(preparationThread.getLooper());
         // Also recover hardware state after a persistent-process restart.
         mWorker.post(this::clearHardware);
         mDisplayManager.registerDisplayListener(new DisplayManager.DisplayListener() {
-            @Override public void onDisplayAdded(int id) {}
+            @Override public void onDisplayAdded(int id) {
+                if (id == Display.DEFAULT_DISPLAY) updatePreparation();
+            }
             @Override public void onDisplayRemoved(int id) {
-                if (id == Display.DEFAULT_DISPLAY) abortCurrent("display removed");
+                if (id == Display.DEFAULT_DISPLAY) {
+                    cancelPreparation("display removed");
+                    abortCurrent("display removed");
+                }
             }
             @Override public void onDisplayChanged(int id) {
                 if (id != Display.DEFAULT_DISPLAY) return;
                 Request owner;
                 synchronized (mLock) { owner = mOwner; }
-                if (owner == null) return;
+                if (owner == null) {
+                    updatePreparation();
+                    return;
+                }
                 Display display = mDisplayManager.getDisplay(id);
                 if (owner.waitingForDisplay) {
                     recordDisplayProgress(owner, display);
@@ -122,7 +150,8 @@ public final class IlluminationApplication extends Application {
                 | DisplayManager.EVENT_TYPE_DISPLAY_CHANGED
                 | DisplayManager.EVENT_TYPE_DISPLAY_REMOVED
                 | DisplayManager.EVENT_TYPE_DISPLAY_STATE
-                | DisplayManager.EVENT_TYPE_DISPLAY_REFRESH_RATE,
+                | DisplayManager.EVENT_TYPE_DISPLAY_REFRESH_RATE
+                | DisplayManager.EVENT_TYPE_DISPLAY_BRIGHTNESS,
                 DisplayManager.PRIVATE_EVENT_TYPE_DISPLAY_COMMITTED_STATE_CHANGED);
         ServiceManager.addService(SERVICE, mService, false);
         Log.i(TAG, "Device illumination service registered");
@@ -194,6 +223,8 @@ public final class IlluminationApplication extends Application {
             out.println("uiOffWrite=" + mLastUiOffWrite);
             out.println("scanContext=" + mLastScanContext);
             out.println("scanContextEnd=" + mLastScanContextEnd);
+            out.println("preparation=" + mPreparationState);
+            out.println("lastPreparation=" + mLastPreparation);
             out.println("native=" + nativeGetDiagnostics());
             // Optional read-only driver diagnostics; never part of capture readiness.
             try {
@@ -258,6 +289,12 @@ public final class IlluminationApplication extends Application {
 
     private void start(Request request) {
         if (!current(request)) return;
+        cancelPreparation("scan active");
+        // Learn the authoritative physical geometry from the validated HAL request.
+        // An app restart falls back to on-demand rendering until this is known.
+        mSensorX = request.x;
+        mSensorY = request.y;
+        mSensorRadius = request.radius;
         mLastStartTiming = "generation=" + request.generation + " queued_ms="
                 + (SystemClock.uptimeMillis() - request.startedAt);
         try {
@@ -589,7 +626,168 @@ public final class IlluminationApplication extends Application {
         if (mScanWakeLock != null && mScanWakeLock.isHeld()) mScanWakeLock.release();
         mWidth = mHeight = 0;
         mState = cleared ? "idle" : "hardware reset failed";
+        // Ownership is released before cleanup is queued. Only now may idle
+        // preparation resume, after the surface and HBM have been cleared.
+        updatePreparation();
         return cleared;
+    }
+
+    private static final class PreparationKey {
+        final int width, height, rotation;
+        final float x, y, radiusX, radiusY, alpha;
+
+        PreparationKey(int width, int height, int rotation, SensorGeometry geometry, float alpha) {
+            this.width = width;
+            this.height = height;
+            this.rotation = rotation;
+            x = geometry.x;
+            y = geometry.y;
+            radiusX = geometry.radiusX;
+            radiusY = geometry.radiusY;
+            this.alpha = alpha;
+        }
+
+        boolean matches(PreparationKey other) {
+            return other != null && width == other.width && height == other.height
+                    && rotation == other.rotation && x == other.x && y == other.y
+                    && radiusX == other.radiusX && radiusY == other.radiusY && alpha == other.alpha;
+        }
+
+        boolean available() {
+            return nativeHasBuffer(width, height, x, y, radiusX, radiusY, alpha);
+        }
+    }
+
+    private PreparationKey readPreparationKey() {
+        synchronized (mLock) {
+            if (mOwner != null || !"idle".equals(mState) || mSensorRadius == 0) return null;
+        }
+        try {
+            Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+            if (display == null || !isScanReady(display) || !isInteractiveForScan()) return null;
+            Point size = new Point();
+            display.getRealSize(size);
+            int rotation = display.getRotation();
+            SensorGeometry geometry = new SensorGeometry(mSensorX, mSensorY, mSensorRadius,
+                    size.x, size.y, rotation);
+            BrightnessInfo info = display.getBrightnessInfo();
+            float brightness = info == null ? Float.NaN : info.adjustedBrightness;
+            if (!validBrightness(brightness)) {
+                brightness = mDisplayManager.getBrightness(Display.DEFAULT_DISPLAY);
+            }
+            if (!validBrightness(brightness)) return null;
+            return new PreparationKey(size.x, size.y, rotation, geometry,
+                    mCalibration.alpha(brightness));
+        } catch (RuntimeException e) {
+            // Speculation is optional; a display/service transition must not affect scans.
+            return null;
+        }
+    }
+
+    private void cancelPreparation(String reason) {
+        mWorker.removeCallbacks(mPrepareWhenStable);
+        mDesiredPreparation = null;
+        mFailedPreparation = null;
+        mPreparationToken = nativeCancelPreparation();
+        mPreparationState = reason;
+        // Do not remove a producer task: its completion is what clears the
+        // in-flight flag. The native token cancels it before/during rendering.
+    }
+
+    private void updatePreparation() {
+        PreparationKey key = readPreparationKey();
+        if (key == null) {
+            if (mDesiredPreparation != null || mPreparationRunning) {
+                cancelPreparation("not idle and interactive");
+            }
+            return;
+        }
+        if (key.available()) {
+            if (mDesiredPreparation != null || mPreparationRunning) {
+                cancelPreparation("ready");
+            }
+            mPreparationState = "ready";
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (!key.matches(mDesiredPreparation)) {
+            mWorker.removeCallbacks(mPrepareWhenStable);
+            mPreparationToken = nativeCancelPreparation();
+            mDesiredPreparation = key;
+            mFailedPreparation = null;
+            mPreparationStableSince = now;
+        }
+        if (key.matches(mFailedPreparation)) return;
+        if (mPreparationRunning) {
+            mPreparationState = "waiting for cancelled preparation";
+            return;
+        }
+        mWorker.removeCallbacks(mPrepareWhenStable);
+        mWorker.postAtTime(mPrepareWhenStable, Math.max(mPreparationStableSince + PREPARATION_QUIET_MS,
+                mLastPreparationStartedAt + PREPARATION_INTERVAL_MS));
+        mPreparationState = "waiting for stable brightness";
+    }
+
+    private void prepareWhenStable() {
+        PreparationKey key = readPreparationKey();
+        if (key == null || !key.matches(mDesiredPreparation) || key.available()) {
+            updatePreparation();
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        long at = Math.max(mPreparationStableSince + PREPARATION_QUIET_MS,
+                mLastPreparationStartedAt + PREPARATION_INTERVAL_MS);
+        if (now < at) {
+            mWorker.postAtTime(mPrepareWhenStable, at);
+            return;
+        }
+        if (mPreparationRunning || key.matches(mFailedPreparation)) return;
+        final long token;
+        synchronized (mLock) {
+            // A Binder begin may race the display snapshot above. Never let
+            // speculation start behind an already accepted scan request.
+            if (mOwner != null || !"idle".equals(mState)) {
+                cancelPreparation("scan active");
+                return;
+            }
+            token = nativeCancelPreparation();
+            mPreparationToken = token;
+            mPreparationRunning = true;
+            mLastPreparationStartedAt = now;
+            mPreparationState = "preparing";
+        }
+        mPreparationWorker.post(() -> {
+            long startedAt = SystemClock.uptimeMillis();
+            boolean prepared = false;
+            try {
+                prepared = nativePrepareBuffer(key.width, key.height, key.x, key.y,
+                        key.radiusX, key.radiusY, key.alpha, token);
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Optional illumination preparation failed", e);
+            }
+            final boolean completed = prepared;
+            final long duration = SystemClock.uptimeMillis() - startedAt;
+            mWorker.post(() -> preparationFinished(key, token, completed, startedAt, duration));
+        });
+    }
+
+    private void preparationFinished(PreparationKey key, long token, boolean prepared,
+            long startedAt, long duration) {
+        // A background thread may start well after dispatch. Rate-limit the
+        // actual work too, including when a stale job yields to the latest key.
+        mLastPreparationStartedAt = Math.max(mLastPreparationStartedAt, startedAt);
+        mPreparationRunning = false;
+        boolean latest = token == mPreparationToken && key.matches(mDesiredPreparation);
+        mLastPreparation = "token=" + token + " prepared=" + prepared + " current=" + latest
+                + " duration_ms=" + duration + " alpha=" + key.alpha;
+        if (latest && !prepared) {
+            // No retry loop for memory/mapper failures at an unchanged brightness.
+            // Normal scans retain the synchronous rendering path.
+            mFailedPreparation = key;
+            mPreparationState = "failed; on-demand rendering available";
+            return;
+        }
+        updatePreparation();
     }
 
     private void abortCurrent(String reason) {
@@ -616,5 +814,10 @@ public final class IlluminationApplication extends Application {
             float y, float radiusX, float radiusY, float alpha, long generation);
     private static native void nativeSetGeneration(long generation);
     private static native boolean nativeHide();
+    private static native long nativeCancelPreparation();
+    private static native boolean nativeHasBuffer(int width, int height, float x, float y,
+            float radiusX, float radiusY, float alpha);
+    private static native boolean nativePrepareBuffer(int width, int height, float x, float y,
+            float radiusX, float radiusY, float alpha, long token);
     private static native String nativeGetDiagnostics();
 }

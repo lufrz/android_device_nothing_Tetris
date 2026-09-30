@@ -39,7 +39,7 @@ struct State {
     bool badMarker = false, nullAddress = false, noSurface = false, invalidSurface = false;
     bool showLatch = true, wrongSurface = false, showCallback = true;
     bool showFenceValid = true, hideFenceValid = true, showNullFence = false;
-    std::function<void()> onLock, onUnlock, onCreate, onApply, onShowFence;
+    std::function<void()> onLock, onUnlock, onCreate, onApply, onShowFence, onDestroy;
     uint32_t lastLayerStack = 0;
     int64_t lastLayer = 0;
     bool trusted = false, secure = false, detachedBeforeHide = false;
@@ -92,6 +92,7 @@ public:
         assert(usage == (GRALLOC_USAGE_SW_WRITE_OFTEN | GRALLOC_USAGE_HW_COMPOSER |
                          GRALLOC_USAGE_HW_TEXTURE));
     }
+    ~GraphicBuffer() { if (native_test::state.onDestroy) native_test::state.onDestroy(); }
     int initCheck() const { return native_test::state.allocationError; }
     int lock(uint64_t usage, void** address) {
         ++native_test::state.locks;

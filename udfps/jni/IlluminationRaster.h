@@ -21,8 +21,11 @@ inline int bayer16(int x, int y) {
 }
 
 // The caller validates dimensions, geometry and opacity; stride is measured in pixels.
-inline void fillIllumination(uint8_t* pixels, int width, int height, uint32_t stride,
-                             float cx, float cy, float rx, float ry, float opacity) {
+template <typename Current>
+inline bool fillIlluminationCancellable(uint8_t* pixels, int width, int height, uint32_t stride,
+                                       float cx, float cy, float rx, float ry, float opacity,
+                                       const Current& current) {
+    if (!current()) return false;
     const float alphaByte = opacity * 255.0f;
     const int lowerAlpha = static_cast<int>(std::floor(alphaByte));
     const int highSamples = static_cast<int>(std::lround((alphaByte - lowerAlpha) * 256.0f));
@@ -43,6 +46,7 @@ inline void fillIllumination(uint8_t* pixels, int width, int height, uint32_t st
         }
     }
     for (int y = 16; y < height; ++y) {
+        if ((y & 31) == 0 && !current()) return false;
         std::memcpy(pixels + static_cast<size_t>(y) * stride * 4,
                     pixels + static_cast<size_t>(y & 15) * stride * 4, width * 4);
     }
@@ -55,6 +59,7 @@ inline void fillIllumination(uint8_t* pixels, int width, int height, uint32_t st
     const int bottom = std::min(height, static_cast<int>(std::ceil(cy + ry + 2.f)));
     const float edge = 1.0f / std::min(rx, ry);
     for (int y = top; y < bottom; ++y) {
+        if (((y - top) & 31) == 0 && !current()) return false;
         auto* row = pixels + static_cast<size_t>(y) * stride * 4;
         for (int x = left; x < right; ++x) {
             const int maskAlpha = alphaCell[y & 15][x & 15];
@@ -71,5 +76,12 @@ inline void fillIllumination(uint8_t* pixels, int width, int height, uint32_t st
                     std::clamp(std::lround(white + (1.0f - coverage) * maskAlpha), 0L, 255L));
         }
     }
+    return current();
+}
+
+inline void fillIllumination(uint8_t* pixels, int width, int height, uint32_t stride,
+                             float cx, float cy, float rx, float ry, float opacity) {
+    fillIlluminationCancellable(pixels, width, height, stride, cx, cy, rx, ry, opacity,
+                                [] { return true; });
 }
 } // namespace tetris::udfps

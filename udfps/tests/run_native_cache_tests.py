@@ -62,18 +62,37 @@ with tempfile.TemporaryDirectory(prefix='tetris-native-cache-') as temporary:
         'unlock_failure_published':
             ('if (gBuffer->unlock() != NO_ERROR)', 'if ((gBuffer->unlock(), false))'),
         'failed_hide_keeps_cache':
-            ('if (!presented) gBufferCache.clear();', '(void)presented;'),
+            ('if (!presented) {\n        gBufferCache.clear();', 'if (!presented) {'),
         'missing_latch_accepted':
             ('|| !pending->completed || !pending->latched\n', '|| !pending->completed\n'),
         'fence_error_accepted':
             ('if (waitStatus == NO_ERROR && current())', 'if (current())'),
         'dead_object_keeps_cache':
-            ('if (status == DEAD_OBJECT) {\n            gClient.clear();\n            gBufferCache.clear();\n        }',
+            ('if (status == DEAD_OBJECT) {\n            gClient.clear();\n            gBufferCache.clear();\n            cancelPreparation(true);\n        }',
              'if (status == DEAD_OBJECT) {\n            gClient.clear();\n        }'),
         'cancellation_before_submit_ignored':
             ('const auto deadline = Clock::now() + std::chrono::milliseconds(500);\n    if (!current())',
              'const auto deadline = Clock::now() + std::chrono::milliseconds(500);\n    if (false)'),
     }
+    mutations.update({
+        'producer_ignores_cancellation':
+            ('return token != 0 && gPreparationEpoch.load(std::memory_order_relaxed) == token;',
+             'return token != 0;'),
+        'prepared_key_not_checked':
+            ('if (gPreparedBuffer.buffer != nullptr && gPreparedBuffer.key == key) {',
+             'if (gPreparedBuffer.buffer != nullptr && (static_cast<void>(key), true)) {'),
+        'generation_keeps_producer_running':
+            ('gGeneration.store(generation, std::memory_order_relaxed);\n    cancelPreparation();',
+             'gGeneration.store(generation, std::memory_order_relaxed);'),
+        'prepared_hit_skips_present':
+            ('gBuffer = std::move(ready.buffer);', 'gBuffer = std::move(ready.buffer); return true;'),
+        'bad_preparation_unlock_published':
+            ('if (unlocked != NO_ERROR) return finish("buffer_unlock_failed");',
+             '(void)unlocked;'),
+        'failed_hide_keeps_ready_buffer':
+            ('if (!presented) {\n        gBufferCache.clear();\n        cancelPreparation(true);',
+             'if (!presented) {\n        gBufferCache.clear();'),
+    })
     negatives = []
     for name, (old, new) in mutations.items():
         assert source.count(old) == 1, (name, source.count(old))
@@ -104,6 +123,12 @@ report = {
         'Unpresented hide and SurfaceFlinger death invalidate cache; reconnect prepares fresh pixels',
         'Cancellation before preparation, after unlock, after surface creation, during callback and fence wait cannot acknowledge readiness',
         'Connection/surface/invalid-input failures do not submit illumination',
+        'Dedicated producer only allocates/marks/rasterizes/unlocks; no compositor client, surface, transaction or worker cache access',
+        'Exact complete prepared key is adopted with unchanged fresh transaction/latch/fence requirements; wrong keys fall back immediately',
+        'Cancellation at lock/unlock barriers across actual threads prevents partial or stale publication and always unlocks successful locks',
+        'Completed pixels survive ordinary epoch/generation cancellation; failed hide and DEAD_OBJECT clear them and revoke in-flight work',
+        'Replaced/cleared GraphicBuffers are destroyed outside the publication mutex, checked by a separate lock-probe thread',
+        'Actual cancellable raster stops at every checkpoint including sensor rows, preserves stride padding and exact complete pixels',
     ],
     'limits': [
         'Android services and callbacks are deterministic host stubs, not real Binder, gralloc, composer or display hardware.',
