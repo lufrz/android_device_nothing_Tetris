@@ -41,7 +41,7 @@ private:
     FingerprintSensorType mSensorType;
     int mMaxEnrollmentsPerUser;
 
-    fingerprint_device_t* mDevice;
+    fingerprint_device_t* mDevice = nullptr;
 };
 
 } // namespace fingerprint

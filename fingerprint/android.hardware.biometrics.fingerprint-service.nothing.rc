@@ -1,4 +1,6 @@
 on boot
+    write /sys/panel_feature/ui_status 0
+    write /sys/devices/platform/soc/1401a000.dsi0/hbm 0
     chown system system /sys/devices/platform/soc/14017000.dsi/hbm
     chown system system /sys/panel_feature/hbm_mode
     chown system system /sys/panel_feature/ui_status
@@ -8,3 +10,5 @@ service vendor.fingerprint-nothing /vendor/bin/hw/android.hardware.biometrics.fi
     user system
     group system input uhid
     shutdown critical
+    onrestart write /sys/panel_feature/ui_status 0
+    onrestart write /sys/devices/platform/soc/1401a000.dsi0/hbm 0

@@ -12,6 +12,9 @@
 #include "fingerprint-nothing.h"
 #include <hardware/hardware.h>
 #include <log/log.h>
+#include <atomic>
+
+#include "IlluminationController.h"
 
 #include "LockoutTracker.h"
 
@@ -32,6 +35,7 @@ class Session : public BnSession {
 public:
     Session(fingerprint_device_t* device, int32_t userId,
             std::shared_ptr<ISessionCallback> cb, LockoutTracker lockoutTracker);
+    ~Session() override;
     ndk::ScopedAStatus generateChallenge() override;
     ndk::ScopedAStatus revokeChallenge(int64_t challenge) override;
     ndk::ScopedAStatus enroll(const HardwareAuthToken& hat,
@@ -73,7 +77,7 @@ public:
 private:
     fingerprint_device_t* mDevice;
     LockoutTracker mLockoutTracker;
-    bool mClosed = false;
+    std::atomic<bool> mClosed = false;
 
     //static ndk::ScopedAStatus ErrorFilter(int32_t error);
     static Error VendorErrorFilter(int32_t error, int32_t* vendorCode);
@@ -85,8 +89,8 @@ private:
     void lockoutTimerExpired();
 
     // lockout timer
-    bool mIsLockoutTimerStarted = false;
-    bool mIsLockoutTimerAborted = false;
+    std::atomic<bool> mIsLockoutTimerStarted = false;
+    std::atomic<bool> mIsLockoutTimerAborted = false;
 
     // The user ID for which this session was created.
     int32_t mUserId;
@@ -95,6 +99,7 @@ private:
     // threads to prevent nested binder calls and consequently a binder thread exhaustion.
     // Practically, it means that this callback should always be called from the worker thread.
     std::shared_ptr<ISessionCallback> mCb;
+    IlluminationController mIllumination;
 
     // Binder death handler.
     AIBinder_DeathRecipient* mDeathRecipient;

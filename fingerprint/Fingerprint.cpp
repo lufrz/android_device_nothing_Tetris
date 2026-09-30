@@ -158,12 +158,13 @@ Fingerprint::~Fingerprint() {
 void Fingerprint::notify(const fingerprint_msg_t* msg) {
     Fingerprint* thisPtr = sInstance;
 
-    if (thisPtr == nullptr || thisPtr->mSession == nullptr || thisPtr->mSession->isClosed()) {
+    auto session = thisPtr ? std::atomic_load(&thisPtr->mSession) : nullptr;
+    if (!session || session->isClosed()) {
         ALOGE("Receiving callbacks before a session is opened.");
         return;
     }
 
-    thisPtr->mSession->notify(msg);
+    session->notify(msg);
 }
 
 ndk::ScopedAStatus Fingerprint::getSensorProps(std::vector<SensorProps>* out) {
@@ -197,7 +198,7 @@ ndk::ScopedAStatus Fingerprint::getSensorProps(std::vector<SensorProps>* out) {
              false,
              false,
              false,
-             false,
+             true, // The Tetris illumination service owns HBM and the sensor circle.
              std::nullopt}};
 
     return ndk::ScopedAStatus::ok();
@@ -206,12 +207,17 @@ ndk::ScopedAStatus Fingerprint::getSensorProps(std::vector<SensorProps>* out) {
 ndk::ScopedAStatus Fingerprint::createSession(int32_t /*sensorId*/, int32_t userId,
                                               const std::shared_ptr<ISessionCallback>& cb,
                                               std::shared_ptr<ISession>* out) {
-    CHECK(mSession == nullptr || mSession->isClosed()) << "Open session already exists!";
+    auto previous = std::atomic_load(&mSession);
+    CHECK(previous == nullptr || previous->isClosed()) << "Open session already exists!";
 
-    mSession = SharedRefBase::make<Session>(mDevice, userId, cb, mLockoutTracker);
-    *out = mSession;
+    auto session = SharedRefBase::make<Session>(mDevice, userId, cb, mLockoutTracker);
+    std::atomic_store(&mSession, session);
+    *out = session;
 
-    mSession->linkToDeath(cb->asBinder().get());
+    if (session->linkToDeath(cb->asBinder().get()) != STATUS_OK) {
+        session->close();
+        return ndk::ScopedAStatus::fromExceptionCode(EX_ILLEGAL_STATE);
+    }
 
     return ndk::ScopedAStatus::ok();
 }

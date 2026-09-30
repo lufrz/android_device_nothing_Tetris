@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     SPDX-FileCopyrightText: The LineageOS Project
+     SPDX-License-Identifier: Apache-2.0
+-->
+<!-- The device renderer owns the light and mask. Keep SystemUI touch handling. -->
+<com.android.systemui.biometrics.ui.view.UdfpsTouchOverlay xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/udfps_touch_overlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent" />

@@ -12,12 +12,15 @@ namespace hardware {
 namespace biometrics {
 namespace fingerprint {
 
-CancellationSignal::CancellationSignal(Session* session)
+CancellationSignal::CancellationSignal(const std::shared_ptr<Session>& session)
     : mSession(session) {
 }
 
 ndk::ScopedAStatus CancellationSignal::cancel() {
-    return mSession->cancel();
+    if (auto session = mSession.lock(); session && !session->isClosed()) {
+        return session->cancel();
+    }
+    return ndk::ScopedAStatus::ok();
 }
 
 } // namespace fingerprint

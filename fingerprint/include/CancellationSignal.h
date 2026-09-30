@@ -20,11 +20,11 @@ namespace fingerprint {
 
 class CancellationSignal : public BnCancellationSignal {
 public:
-    CancellationSignal(Session* session);
+    explicit CancellationSignal(const std::shared_ptr<Session>& session);
     ndk::ScopedAStatus cancel() override;
 
 private:
-    Session* mSession;
+    std::weak_ptr<Session> mSession;
 };
 
 } // namespace fingerprint

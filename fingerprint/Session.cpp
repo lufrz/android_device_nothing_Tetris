@@ -6,7 +6,6 @@
 
 #include <thread>
 
-#include <android-base/file.h>
 #include <android-base/stringprintf.h>
 
 #include "Session.h"
@@ -22,7 +21,7 @@ namespace fingerprint {
 
 void onClientDeath(void* cookie) {
     ALOGI("FingerprintService has died");
-    Session* session = static_cast<Session*>(cookie);
+    auto session = static_cast<std::weak_ptr<Session>*>(cookie)->lock();
     if (session && !session->isClosed()) {
         session->close();
     }
@@ -30,11 +29,20 @@ void onClientDeath(void* cookie) {
 
 Session::Session(fingerprint_device_t* device, int32_t userId,
             std::shared_ptr<ISessionCallback> cb, LockoutTracker lockoutTracker)
-            : mDevice(device), mLockoutTracker(lockoutTracker), mUserId(userId), mCb(cb) {
+            : mDevice(device), mLockoutTracker(lockoutTracker), mUserId(userId), mCb(cb),
+              mIllumination(cb) {
     mDeathRecipient = AIBinder_DeathRecipient_new(onClientDeath);
+    AIBinder_DeathRecipient_setOnUnlinked(mDeathRecipient, [](void* cookie) {
+        delete static_cast<std::weak_ptr<Session>*>(cookie);
+    });
 
     std::string path = ::android::base::StringPrintf("/data/vendor_de/%d/fpdata/", mUserId);
     mDevice->setActiveGroup(mDevice, mUserId, path.c_str());
+}
+
+Session::~Session() {
+    mIllumination.close();
+    if (mDeathRecipient) AIBinder_DeathRecipient_delete(mDeathRecipient);
 }
 
 ndk::ScopedAStatus Session::generateChallenge() {
@@ -59,13 +67,15 @@ ndk::ScopedAStatus Session::enroll(const HardwareAuthToken& hat,
     hw_auth_token_t authToken;
     translate(hat, authToken);
 
+    mIllumination.startOperation();
     int error = mDevice->enroll(mDevice, &authToken);
     if (error) {
+        mIllumination.finishOperation();
         ALOGE("enroll failed: %d", error);
         mCb->onError(Error::UNABLE_TO_PROCESS, error);
     }
 
-    *out = SharedRefBase::make<CancellationSignal>(this);
+    *out = SharedRefBase::make<CancellationSignal>(ref<Session>());
     return ndk::ScopedAStatus::ok();
 }
 
@@ -73,13 +83,15 @@ ndk::ScopedAStatus Session::authenticate(int64_t operationId,
                                          std::shared_ptr<ICancellationSignal>* out) {
     ALOGI("authenticate");
 
+    mIllumination.startOperation();
     int error = mDevice->authenticate(mDevice, operationId);
     if (error) {
+        mIllumination.finishOperation();
         ALOGE("authenticate failed: %d", error);
         mCb->onError(Error::UNABLE_TO_PROCESS, error);
     }
 
-    *out = SharedRefBase::make<CancellationSignal>(this);
+    *out = SharedRefBase::make<CancellationSignal>(ref<Session>());
     return ndk::ScopedAStatus::ok();
 }
 
@@ -88,7 +100,7 @@ ndk::ScopedAStatus Session::detectInteraction(std::shared_ptr<ICancellationSigna
     ALOGD("Detect interaction is not supported");
     mCb->onError(Error::UNABLE_TO_PROCESS, 0 /* vendorCode */);
 
-    *out = SharedRefBase::make<CancellationSignal>(this);
+    *out = SharedRefBase::make<CancellationSignal>(ref<Session>());
     return ndk::ScopedAStatus::ok();
 }
 
@@ -149,7 +161,7 @@ ndk::ScopedAStatus Session::onPointerDown(int32_t /*pointerId*/, int32_t x, int3
                                           float major) {
     ALOGI("onPointerDown: x=%d, y=%d, minor=%f, major=%f", x, y, minor, major);
 
-    ::android::base::WriteStringToFile("1", "/sys/panel_feature/ui_status");
+    mIllumination.pointerDown();
 
     return ndk::ScopedAStatus::ok();
 }
@@ -157,7 +169,7 @@ ndk::ScopedAStatus Session::onPointerDown(int32_t /*pointerId*/, int32_t x, int3
 ndk::ScopedAStatus Session::onPointerUp(int32_t /*pointerId*/) {
     ALOGI("onPointerUp");
 
-    ::android::base::WriteStringToFile("0", "/sys/panel_feature/ui_status");
+    mIllumination.pointerUp();
 
     return ndk::ScopedAStatus::ok();
 }
@@ -165,7 +177,8 @@ ndk::ScopedAStatus Session::onPointerUp(int32_t /*pointerId*/) {
 ndk::ScopedAStatus Session::onUiReady() {
     ALOGI("onUiReady");
 
-    ::android::base::WriteStringToFile("1", "/sys/panel_feature/ui_status");
+    // Readiness comes from our presented surface and HBM state. A framework UI
+    // callback may precede the illumination buffer and must not restart a capture.
 
     return ndk::ScopedAStatus::ok();
 }
@@ -189,7 +202,14 @@ ndk::ScopedAStatus Session::detectInteractionWithContext(
 }
 
 ndk::ScopedAStatus Session::onPointerDownWithContext(const PointerContext& context) {
-    return onPointerDown(context.pointerId, context.x, context.y, context.minor, context.major);
+    // Real MotionEvents while dozing also have isAod=true. Only the wake sensor
+    // uses an invalid pointer id and zero event/gesture times.
+    const bool syntheticAod = context.isAod && context.pointerId < 0 &&
+            context.time == 0 && context.gestureStart == 0;
+    ALOGI("onPointerDownWithContext: x=%f, y=%f, isAod=%d, synthetic=%d", context.x,
+          context.y, context.isAod, syntheticAod);
+    mIllumination.pointerDown(syntheticAod);
+    return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus Session::onPointerUpWithContext(const PointerContext& context) {
@@ -201,6 +221,7 @@ ndk::ScopedAStatus Session::onContextChanged(const common::OperationContext& /*c
 }
 
 ndk::ScopedAStatus Session::onPointerCancelWithContext(const PointerContext& /*context*/) {
+    mIllumination.pointerCancel();
     return ndk::ScopedAStatus::ok();
 }
 
@@ -211,7 +232,7 @@ ndk::ScopedAStatus Session::setIgnoreDisplayTouches(bool /*shouldIgnore*/) {
 ndk::ScopedAStatus Session::cancel() {
     ALOGI("cancel");
 
-    ::android::base::WriteStringToFile("0", "/sys/panel_feature/ui_status");
+    mIllumination.finishOperation();
 
     int ret = mDevice->cancel(mDevice);
 
@@ -227,16 +248,17 @@ ndk::ScopedAStatus Session::cancel() {
 ndk::ScopedAStatus Session::close() {
     ALOGI("close");
 
-    ::android::base::WriteStringToFile("0", "/sys/panel_feature/ui_status");
-
-    mClosed = true;
+    mIllumination.close();
+    if (mClosed.exchange(true)) return ndk::ScopedAStatus::ok();
     mCb->onSessionClosed();
     AIBinder_DeathRecipient_delete(mDeathRecipient);
+    mDeathRecipient = nullptr;
     return ndk::ScopedAStatus::ok();
 }
 
 binder_status_t Session::linkToDeath(AIBinder* binder) {
-    return AIBinder_linkToDeath(binder, mDeathRecipient, this);
+    return AIBinder_linkToDeath(binder, mDeathRecipient,
+            new std::weak_ptr<Session>(ref<Session>()));
 }
 
 bool Session::isClosed() {
@@ -282,6 +304,8 @@ AcquiredInfo Session::VendorAcquiredFilter(int32_t info, int32_t* vendorCode) {
     switch (info) {
         case FINGERPRINT_ACQUIRED_GOOD:
             return AcquiredInfo::GOOD;
+        case FINGERPRINT_ACQUIRED_DETECTED:
+            return AcquiredInfo::START;
         case FINGERPRINT_ACQUIRED_PARTIAL:
             return AcquiredInfo::PARTIAL;
         case FINGERPRINT_ACQUIRED_INSUFFICIENT:
@@ -307,11 +331,13 @@ bool Session::checkSensorLockout() {
     LockoutMode lockoutMode = mLockoutTracker.getMode();
 
     if (lockoutMode == LockoutMode::PERMANENT) {
+        mIllumination.finishOperation();
         ALOGE("Fail: lockout permanent");
         mCb->onLockoutPermanent();
         mIsLockoutTimerAborted = true;
         return true;
     } else if (lockoutMode == LockoutMode::TIMED) {
+        mIllumination.finishOperation();
         int64_t timeLeft = mLockoutTracker.getLockoutTimeLeft();
         ALOGE("Fail: lockout timed: %ld", timeLeft);
         mCb->onLockoutTimed(timeLeft);
@@ -328,15 +354,15 @@ void Session::clearLockout(bool clearAttemptCounter) {
 }
 
 void Session::startLockoutTimer(int64_t timeout) {
+    if (mIsLockoutTimerStarted.exchange(true)) return;
     mIsLockoutTimerAborted = false;
-    std::function<void()> action =
-            std::bind(&Session::lockoutTimerExpired, this);
-    std::thread([timeout, action]() {
+    std::weak_ptr<Session> session = ref<Session>();
+    std::thread([timeout, session]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(timeout));
-        action();
+        if (auto owner = session.lock(); owner && !owner->isClosed()) {
+            owner->lockoutTimerExpired();
+        }
     }).detach();
-
-    mIsLockoutTimerStarted = true;
 }
 
 void Session::lockoutTimerExpired() {
@@ -350,7 +376,7 @@ void Session::lockoutTimerExpired() {
 void Session::notify(const fingerprint_msg_t* msg) {
     switch (msg->type) {
         case FINGERPRINT_ERROR: {
-            ::android::base::WriteStringToFile("0", "/sys/panel_feature/ui_status");
+            mIllumination.finishOperation();
             int32_t vendorCode = 0;
             Error result = VendorErrorFilter(msg->data.error, &vendorCode);
             ALOGD("onError(%hhd, %d)", result, vendorCode);
@@ -361,19 +387,24 @@ void Session::notify(const fingerprint_msg_t* msg) {
             AcquiredInfo result =
                     VendorAcquiredFilter(msg->data.acquired.acquired_info, &vendorCode);
             if (result != AcquiredInfo::VENDOR) {
+                // Acquisition quality does not identify a physical finger lift.
                 ALOGD("onAcquired(%d, %d)", result, vendorCode);
                 mCb->onAcquired(result, vendorCode);
             } else {
                 ALOGW("onAcquired(AcquiredInfo::VENDOR, %d)", vendorCode);
-                // Do not send onAcquired or illumination will be turned off prematurely
+                // Goodix also supplies finger events during AOD. The controller
+                // accepts these only while an authentication/enrollment is active.
                 if (vendorCode == 2) {
-                    ::android::base::WriteStringToFile("1", "/sys/panel_feature/ui_status");
+                    mIllumination.vendorPointerDown();
                 } else if (vendorCode == 3) {
-                    ::android::base::WriteStringToFile("0", "/sys/panel_feature/ui_status");
+                    mIllumination.vendorPointerUp();
                 }
             }
         } break;
         case FINGERPRINT_TEMPLATE_ENROLLING: {
+            if (msg->data.enroll.samples_remaining == 0) {
+                mIllumination.finishOperation();
+            }
             ALOGD("onEnrollResult(fid=%d, gid=%d, rem=%d)", msg->data.enroll.finger.fid,
                   msg->data.enroll.finger.gid, msg->data.enroll.samples_remaining);
             mCb->onEnrollmentProgress(msg->data.enroll.finger.fid,
@@ -391,10 +422,12 @@ void Session::notify(const fingerprint_msg_t* msg) {
             mCb->onEnrollmentsRemoved(enrollments);
         } break;
         case FINGERPRINT_AUTHENTICATED: {
-            ::android::base::WriteStringToFile("0", "/sys/panel_feature/ui_status");
+            // A late negative result can belong to the preceding contact.
+            // Only success ends the operation; contact events control illumination.
             ALOGD("onAuthenticated(fid=%d, gid=%d)", msg->data.authenticated.finger.fid,
                 msg->data.authenticated.finger.gid);
             if (msg->data.authenticated.finger.fid != 0) {
+                mIllumination.finishOperation();
                 const hw_auth_token_t hat = msg->data.authenticated.hat;
                 HardwareAuthToken authToken;
                 translate(hat, authToken);
