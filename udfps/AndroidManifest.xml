@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.lineageos.tetris.udfps"
+    android:sharedUserId="android.uid.system">
+    <uses-permission android:name="android.permission.ACCESS_SURFACE_FLINGER" />
+    <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" />
+    <uses-permission android:name="android.permission.CONTROL_DISPLAY_BRIGHTNESS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <application
+        android:name=".IlluminationApplication"
+        android:label="Tetris fingerprint illumination"
+        android:allowBackup="false"
+        android:directBootAware="true"
+        android:persistent="true"
+        android:defaultToDeviceProtectedStorage="true"
+        android:hasCode="true" />
+</manifest>

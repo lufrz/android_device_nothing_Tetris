@@ -1,0 +1,620 @@
+/* SPDX-FileCopyrightText: 2026 The LineageOS Project
+ * SPDX-License-Identifier: Apache-2.0 */
+package org.lineageos.tetris.udfps;
+
+import android.app.Application;
+import android.content.res.Resources;
+import android.graphics.Point;
+import android.hardware.display.BrightnessInfo;
+import android.hardware.display.DisplayManager;
+import android.os.Binder;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.IBinder;
+import android.os.Process;
+import android.os.PowerManager;
+import android.os.RemoteException;
+import android.os.ServiceManager;
+import android.os.SystemClock;
+import android.os.UserHandle;
+import android.util.Log;
+import android.view.Display;
+import android.view.DisplayInfo;
+
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import vendor.nothing.hardware.udfps.IIllumination;
+import vendor.nothing.hardware.udfps.IIlluminationCallback;
+
+/** Device-local owner of the compensation surface, fingerprint HBM and UI-ready signal. */
+public final class IlluminationApplication extends Application {
+    private static final String TAG = "TetrisUdfps";
+    private static final String SERVICE = IIllumination.DESCRIPTOR + "/default";
+    private static final String HBM = "/sys/devices/platform/soc/1401a000.dsi0/hbm";
+    private static final String UI_READY = "/sys/panel_feature/ui_status";
+    private static final String HBM_TIMING = HBM + "_timing";
+    private static final long MAX_SCAN_MS = 10_000;
+    private static final long DISPLAY_READY_TIMEOUT_MS = 2_000;
+    private static final long WAKE_LOCK_TIMEOUT_MS = MAX_SCAN_MS + DISPLAY_READY_TIMEOUT_MS;
+
+    private final Object mLock = new Object();
+    private Handler mWorker;
+    private DisplayManager mDisplayManager;
+    private PowerManager mPowerManager;
+    private PowerManager.WakeLock mScanWakeLock;
+    private Calibration mCalibration;
+    // Binder threads invalidate ownership immediately, including while a present fence is pending.
+    private Request mOwner;
+    private long mGeneration;
+    private volatile String mState = "starting";
+    private volatile String mLastFailure = "none";
+    private volatile float mBrightness = Float.NaN;
+    private volatile float mAlpha = Float.NaN;
+    private volatile String mLastStartTiming = "none";
+    private volatile String mLastCleanupTiming = "none";
+    private volatile String mLastHbmObservation = "none";
+    private volatile String mLastHbmOffWrite = "none";
+    private volatile String mLastUiOnWrite = "none";
+    private volatile String mLastUiOffWrite = "none";
+    private volatile String mLastScanContext = "none";
+    private volatile String mLastScanContextEnd = "none";
+    private long mScanContextToken;
+    private int mWidth;
+    private int mHeight;
+    private int mRotation;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        if (UserHandle.myUserId() != UserHandle.USER_SYSTEM) return;
+        System.loadLibrary("tetris_udfps_surface");
+        Resources res = getResources();
+        mCalibration = new Calibration(
+                res.getIntArray(R.array.config_udfpsMtkGhbmAlphaMap),
+                res.getInteger(R.integer.config_udfpsMtkGhbmAlphaMapScale),
+                res.getInteger(R.integer.config_udfpsMtkGhbmNormalMaxBacklight),
+                res.getInteger(R.integer.config_udfpsMtkGhbmMaxBacklight),
+                res.getInteger(R.integer.config_udfpsMtkGhbmMinBacklight));
+        mDisplayManager = getSystemService(DisplayManager.class);
+        HandlerThread thread = new HandlerThread("TetrisUdfpsIllumination");
+        thread.start();
+        mWorker = new Handler(thread.getLooper());
+        // Also recover hardware state after a persistent-process restart.
+        mWorker.post(this::clearHardware);
+        mDisplayManager.registerDisplayListener(new DisplayManager.DisplayListener() {
+            @Override public void onDisplayAdded(int id) {}
+            @Override public void onDisplayRemoved(int id) {
+                if (id == Display.DEFAULT_DISPLAY) abortCurrent("display removed");
+            }
+            @Override public void onDisplayChanged(int id) {
+                if (id != Display.DEFAULT_DISPLAY) return;
+                Request owner;
+                synchronized (mLock) { owner = mOwner; }
+                if (owner == null) return;
+                Display display = mDisplayManager.getDisplay(id);
+                if (owner.waitingForDisplay) {
+                    recordDisplayProgress(owner, display);
+                    // SystemUI pulses asynchronously. Never block the worker for this listener.
+                    if (display != null && isScanReady(display)) {
+                        startRendering(owner);
+                    }
+                    return;
+                }
+                // A queued display event may arrive before start() begins waiting for the pulse.
+                if (!owner.renderingStarted) return;
+                recordDisplayProgress(owner, display);
+                Point size = new Point();
+                if (display != null) display.getRealSize(size);
+                // Both the requested and completed display power states must stay ON.
+                if (display == null || !isScanReady(display)
+                        || (mWidth != 0 && (size.x != mWidth || size.y != mHeight
+                                || display.getRotation() != mRotation))) {
+                    fail(owner, "display is not committed ON or geometry changed");
+                }
+            }
+        }, mWorker, DisplayManager.EVENT_TYPE_DISPLAY_ADDED
+                | DisplayManager.EVENT_TYPE_DISPLAY_CHANGED
+                | DisplayManager.EVENT_TYPE_DISPLAY_REMOVED
+                | DisplayManager.EVENT_TYPE_DISPLAY_STATE
+                | DisplayManager.EVENT_TYPE_DISPLAY_REFRESH_RATE,
+                DisplayManager.PRIVATE_EVENT_TYPE_DISPLAY_COMMITTED_STATE_CHANGED);
+        ServiceManager.addService(SERVICE, mService, false);
+        Log.i(TAG, "Device illumination service registered");
+    }
+
+    private final IIllumination.Stub mService = new IIllumination.Stub() {
+        @Override public int getInterfaceVersion() { return IIllumination.VERSION; }
+        @Override public String getInterfaceHash() { return IIllumination.HASH; }
+
+        @Override public void begin(IIlluminationCallback client, int x, int y, int radius) {
+            enforceCaller();
+            if (client == null) throw new IllegalArgumentException("Missing owner callback");
+            // Validate the physical rectangle before queueing work or accepting ownership.
+            new SensorGeometry(x, y, radius, 1080, 2400, 0);
+            synchronized (mLock) {
+                if (mOwner != null && mOwner.token.equals(client.asBinder())) return;
+                if (mOwner != null) mOwner.unlink();
+                nativeSetGeneration(++mGeneration);
+                Request request = new Request(client, x, y, radius, mGeneration);
+                try {
+                    request.token.linkToDeath(request, 0);
+                } catch (RemoteException e) {
+                    mOwner = null;
+                    mWorker.post(IlluminationApplication.this::clearHardware);
+                    return;
+                }
+                mOwner = request;
+                mWorker.post(() -> start(request));
+                mWorker.postAtTime(() -> fail(request, "scan timeout"),
+                        request.startedAt + MAX_SCAN_MS);
+            }
+        }
+
+        @Override public void end(IIlluminationCallback client) {
+            enforceCaller();
+            if (client == null) return;
+            synchronized (mLock) {
+                if (mOwner == null || !mOwner.token.equals(client.asBinder())) return;
+                releaseLocked(mOwner);
+                mWorker.post(IlluminationApplication.this::clearHardware);
+            }
+        }
+
+        @Override protected void dump(FileDescriptor fd, PrintWriter out, String[] args) {
+            if (checkCallingOrSelfPermission(android.Manifest.permission.DUMP)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+            out.println("state=" + mState);
+            out.println("brightness=" + mBrightness + " alpha=" + mAlpha);
+            synchronized (mLock) {
+                out.println("generation=" + mGeneration + " owner=" + (mOwner != null));
+            }
+            out.println("lastFailure=" + mLastFailure);
+            out.println("lastStart=" + mLastStartTiming);
+            out.println("lastCleanup=" + mLastCleanupTiming);
+            out.println("hbmControl=composer-buffer");
+            out.println("displayWake=systemui-doze");
+            out.println("hbmObservation=" + mLastHbmObservation);
+            Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+            out.println("display=" + (display == null ? "missing"
+                    : Display.stateToString(display.getState())));
+            out.println("displayCommitted=" + (display == null ? "missing"
+                    : Display.stateToString(display.getCommittedState())));
+            synchronized (mLock) {
+                out.println("powerManager=" + (mPowerManager != null));
+                out.println("scanWakeLock=" + (mScanWakeLock != null && mScanWakeLock.isHeld()));
+            }
+            out.println("hbmOffWrite=" + mLastHbmOffWrite);
+            out.println("uiOnWrite=" + mLastUiOnWrite);
+            out.println("uiOffWrite=" + mLastUiOffWrite);
+            out.println("scanContext=" + mLastScanContext);
+            out.println("scanContextEnd=" + mLastScanContextEnd);
+            out.println("native=" + nativeGetDiagnostics());
+            // Optional read-only driver diagnostics; never part of capture readiness.
+            try {
+                out.println("hbmTiming:\n" + Files.readString(Path.of(HBM_TIMING)).trim());
+            } catch (IOException | SecurityException e) {
+                out.println("hbmTiming=unavailable (" + e.getClass().getSimpleName() + ")");
+            }
+        }
+    };
+
+    private static void enforceCaller() {
+        // SELinux further limits access to the fingerprint HAL domain.
+        if (Binder.getCallingUid() != Process.SYSTEM_UID) {
+            throw new SecurityException("Fingerprint HAL only");
+        }
+    }
+
+    private final class Request implements IBinder.DeathRecipient {
+        final IIlluminationCallback client;
+        final IBinder token;
+        final int x, y, radius;
+        final long generation;
+        final long startedAt = SystemClock.uptimeMillis();
+        boolean waitingForDisplay;
+        boolean renderingStarted;
+        boolean requestedOnObserved;
+        boolean committedOnObserved;
+        boolean contextClassified;
+        boolean interactiveAtStart;
+        Request(IIlluminationCallback callback, int x, int y, int radius, long generation) {
+            client = callback;
+            token = callback.asBinder();
+            this.x = x;
+            this.y = y;
+            this.radius = radius;
+            this.generation = generation;
+        }
+        void unlink() { token.unlinkToDeath(this, 0); }
+        @Override public void binderDied() {
+            synchronized (mLock) {
+                if (mOwner != this) return;
+                mOwner = null;
+                nativeSetGeneration(++mGeneration);
+                mWorker.post(IlluminationApplication.this::clearHardware);
+            }
+        }
+    }
+
+    private boolean current(Request request) {
+        synchronized (mLock) { return currentLocked(request); }
+    }
+
+    private boolean currentLocked(Request request) {
+        return mOwner == request && mGeneration == request.generation;
+    }
+
+    private void releaseLocked(Request request) {
+        request.unlink();
+        mOwner = null;
+        nativeSetGeneration(++mGeneration);
+    }
+
+    private void start(Request request) {
+        if (!current(request)) return;
+        mLastStartTiming = "generation=" + request.generation + " queued_ms="
+                + (SystemClock.uptimeMillis() - request.startedAt);
+        try {
+            if (!clearHardware()) throw new IOException("Unable to reset fingerprint HBM");
+            ensureDisplayReady(request);
+        } catch (IOException | RuntimeException e) {
+            fail(request, e.toString());
+        }
+    }
+
+    private static boolean isScanReady(Display display) {
+        // getState() changes before SurfaceFlinger finishes the display power transition.
+        // A committed ON state completes that transition; presentation and HBM checks
+        // still follow because this is not an optical readiness measurement.
+        DisplayInfo info = new DisplayInfo();
+        return display != null && display.getDisplayInfo(info)
+                && info.state == Display.STATE_ON && info.committedState == Display.STATE_ON;
+    }
+
+    private boolean isInteractiveForScan() {
+        try {
+            return mPowerManager != null && mPowerManager.isInteractive();
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Interactive state unavailable; retaining ambient scan timing", e);
+            return false;
+        }
+    }
+
+    private void recordDisplayProgress(Request request, Display display) {
+        if (display == null || !current(request)) return;
+        long elapsed = SystemClock.uptimeMillis() - request.startedAt;
+        if (!request.requestedOnObserved && display.getState() == Display.STATE_ON) {
+            request.requestedOnObserved = true;
+            mLastStartTiming += " requested_on_observed_elapsed_ms=" + elapsed;
+        }
+        if (!request.committedOnObserved && isScanReady(display)) {
+            request.committedOnObserved = true;
+            mLastStartTiming += " committed_on_observed_elapsed_ms=" + elapsed;
+        }
+    }
+
+    private static boolean isDrawable(int state) {
+        return state == Display.STATE_ON || state == Display.STATE_DOZE;
+    }
+
+    private void ensureDisplayReady(Request request) throws IOException {
+        synchronized (mLock) {
+            if (!currentLocked(request)) return;
+            Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+            if (display == null) throw new IOException("Display is unavailable");
+            recordDisplayProgress(request, display);
+            // A missing framework dependency must fail this request, not crash the
+            // persistent process before its diagnostic Binder service is registered.
+            if (mPowerManager == null) {
+                PowerManager powerManager = getSystemService(PowerManager.class);
+                if (powerManager == null) {
+                    throw new IOException("PowerManager is unavailable (power/thermalservice)");
+                }
+                PowerManager.WakeLock wakeLock = powerManager.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK, "TetrisUdfps:scan");
+                wakeLock.setReferenceCounted(false);
+                mPowerManager = powerManager;
+                mScanWakeLock = wakeLock;
+            }
+            if (!request.contextClassified) {
+                request.interactiveAtStart = isInteractiveForScan();
+                request.contextClassified = true;
+                mLastStartTiming += " interactive_at_start=" + request.interactiveAtStart;
+            }
+            // Bound the CPU hold independently of Java timeout delivery during suspend.
+            mScanWakeLock.acquire(WAKE_LOCK_TIMEOUT_MS);
+            if (!isScanReady(display)) {
+                request.waitingForDisplay = true;
+                mState = "waiting for display";
+                long waitStartedAt = SystemClock.uptimeMillis();
+                mLastStartTiming += " wait_from=" + Display.stateToString(display.getState())
+                        + " wait_committed_from=" + Display.stateToString(display.getCommittedState())
+                        + " display_wait_started_uptime_ms=" + waitStartedAt;
+                // The FOD wake-up sensor lets SystemUI request the fingerprint doze pulse.
+                // A full wake here races its proximity check and can end Doze before the
+                // held contact is delivered. Keep this request pending until that pulse.
+                Log.i(TAG, "Waiting for SystemUI doze pulse: " + mLastStartTiming);
+                mWorker.postAtTime(() -> {
+                    if (current(request) && request.waitingForDisplay) {
+                        fail(request, "SystemUI doze pulse timeout");
+                    }
+                }, waitStartedAt + DISPLAY_READY_TIMEOUT_MS);
+                // Recheck in case the pulse completed ON while this worker was starting.
+                // The queued task still validates the current owner.
+                mWorker.post(() -> {
+                    if (!current(request) || !request.waitingForDisplay) return;
+                    Display readyDisplay = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+                    if (readyDisplay != null && isScanReady(readyDisplay)) {
+                        startRendering(request);
+                    }
+                });
+                return;
+            }
+        }
+        startRendering(request);
+    }
+
+    private void startRendering(Request request) {
+        synchronized (mLock) {
+            if (!currentLocked(request) || request.renderingStarted) return;
+            request.waitingForDisplay = false;
+            request.renderingStarted = true;
+        }
+        try {
+            Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+            if (display == null || !isScanReady(display)) {
+                throw new IOException("Display is not ready for fingerprint capture");
+            }
+            recordDisplayProgress(request, display);
+            mLastStartTiming += " drawable_elapsed_ms="
+                    + (SystemClock.uptimeMillis() - request.startedAt)
+                    + " display=" + Display.stateToString(display.getState())
+                    + " display_committed=" + Display.stateToString(display.getCommittedState());
+            Point size = new Point();
+            display.getRealSize(size);
+            mWidth = size.x;
+            mHeight = size.y;
+            mRotation = display.getRotation();
+            SensorGeometry geometry = new SensorGeometry(request.x, request.y, request.radius,
+                    mWidth, mHeight, mRotation);
+            BrightnessInfo info = display.getBrightnessInfo();
+            float brightness = info == null ? Float.NaN : info.adjustedBrightness;
+            if (!validBrightness(brightness)) {
+                brightness = mDisplayManager.getBrightness(Display.DEFAULT_DISPLAY);
+            }
+            mBrightness = brightness;
+            mAlpha = mCalibration.alpha(brightness);
+            synchronized (mLock) {
+                if (!currentLocked(request)) return;
+            }
+            // A pulse can already be ON while the phone remains non-interactive.
+            // Never upgrade an ambient request if unlocking wakes the phone later.
+            boolean interactive = request.contextClassified && request.interactiveAtStart
+                    && isInteractiveForScan();
+            publishScanContext(request, interactive);
+            mState = "waiting for presentation";
+            // JNI waits at most 500 ms for the actual present fence, off the main/binder threads.
+            long showStartedAt = SystemClock.uptimeMillis();
+            boolean presented = nativeShow(mWidth, mHeight, display.getLayerStack(), geometry.x, geometry.y,
+                    geometry.radiusX, geometry.radiusY, mAlpha, request.generation);
+            mLastStartTiming += " show_ms=" + (SystemClock.uptimeMillis() - showStartedAt)
+                    + " presented=" + presented;
+            if (!presented) {
+                throw new IOException("Compensation surface was not presented: "
+                        + nativeGetDiagnostics());
+            }
+            synchronized (mLock) {
+                if (!currentLocked(request)) {
+                    clearHardware();
+                    return;
+                }
+                Point presentedSize = new Point();
+                display.getRealSize(presentedSize);
+                if (!isScanReady(display) || display.getRotation() != mRotation
+                        || presentedSize.x != mWidth || presentedSize.y != mHeight) {
+                    throw new IOException("Display changed during presentation");
+                }
+                // The marked gralloc buffer makes the composer carry HBM_ENABLE with its
+                // pixels. Do not issue a second, unsynchronised sysfs enable after presentation.
+                if (!"1".equals(readHbm())) {
+                    throw new IOException("Composer did not enable fingerprint HBM");
+                }
+                mState = "waiting for panel";
+            }
+            mLastStartTiming += " hbm_on_elapsed_ms="
+                    + (SystemClock.uptimeMillis() - request.startedAt);
+            Log.i(TAG, "Composer HBM presented: " + mLastStartTiming);
+            // The present fence covers the compositor frame. Readback is still a driver
+            // state, not an optical measurement; retain two refresh periods for panel settling
+            // before notifying Goodix, pending measurements on the device.
+            float refreshRate = display.getRefreshRate();
+            if (!Float.isFinite(refreshRate) || refreshRate <= 0) refreshRate = 60f;
+            long settleMs = Math.max(17L, Math.min(67L, (long) Math.ceil(2000f / refreshRate)));
+            mWorker.postDelayed(() -> ready(request), settleMs);
+        } catch (IOException | RuntimeException e) {
+            fail(request, e.toString());
+        }
+    }
+
+    private void ready(Request request) {
+        try {
+            synchronized (mLock) {
+                if (!currentLocked(request)) return;
+                Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+                Point size = new Point();
+                if (display != null) display.getRealSize(size);
+                if (display == null || !isScanReady(display)
+                        || display.getRotation() != mRotation || size.x != mWidth
+                        || size.y != mHeight) {
+                    throw new IOException("Display changed before sensor readiness");
+                }
+                if (!"1".equals(readHbm())) {
+                    throw new IOException("Fingerprint HBM was revoked");
+                }
+                writeNodeTimed(UI_READY, true);
+                mState = "illuminating";
+            }
+            mLastStartTiming += " ui_ready_elapsed_ms="
+                    + (SystemClock.uptimeMillis() - request.startedAt);
+            Log.i(TAG, "Illumination ready: " + mLastStartTiming + " write={"
+                    + mLastUiOnWrite + "} brightness=" + mBrightness + " alpha=" + mAlpha);
+        } catch (IOException | RuntimeException e) {
+            fail(request, e.toString());
+        }
+    }
+
+    private static boolean validBrightness(float value) {
+        return Float.isFinite(value) && value >= 0f && value <= 1f;
+    }
+
+    private static void writeNode(String path, boolean enabled) throws IOException {
+        try (FileOutputStream stream = new FileOutputStream(path)) {
+            stream.write((enabled ? "1" : "0").getBytes(StandardCharsets.US_ASCII));
+        }
+    }
+
+    private static void writeScanContext(String command) throws IOException {
+        try (FileOutputStream stream = new FileOutputStream(HBM)) {
+            stream.write(command.getBytes(StandardCharsets.US_ASCII));
+        }
+    }
+
+    private void publishScanContext(Request request, boolean interactive) throws IOException {
+        String mode = interactive ? "interactive" : "ambient";
+        long startedAt = SystemClock.uptimeMillis();
+        try {
+            // The versioned prefix is rejected by older kernels, without toggling HBM.
+            writeScanContext("scan_v1 begin " + request.generation + " " + mode);
+            mScanContextToken = request.generation;
+            mLastScanContext = "generation=" + request.generation + " mode=" + mode
+                    + " accepted=true started_uptime_ms=" + startedAt;
+        } catch (IOException | SecurityException e) {
+            // Even a close failure can follow an accepted write. Revoke any context
+            // before falling back to the previous kernel path, with no surface yet.
+            mLastScanContext = "generation=" + request.generation + " mode=" + mode
+                    + " accepted=false started_uptime_ms=" + startedAt
+                    + " reason=" + e.getClass().getSimpleName();
+            writeNodeTimed(HBM, false);
+            if (!"0".equals(readHbm())) {
+                throw new IOException("Cannot revoke fingerprint scan context", e);
+            }
+            mScanContextToken = 0;
+            Log.i(TAG, "Scan context unavailable; using previous kernel path: " + e);
+        }
+    }
+
+    private void endScanContext() {
+        long token = mScanContextToken;
+        if (token == 0) return;
+        // clearHardware has already confirmed HBM off. Legacy HBM=0 also revokes
+        // the context; the token-specific end is idempotent and cannot clear a newer one.
+        try {
+            writeScanContext("scan_v1 end " + token);
+            mLastScanContextEnd = "generation=" + token + " success=true";
+        } catch (IOException | SecurityException e) {
+            mLastScanContextEnd = "generation=" + token + " success=false reason="
+                    + e.getClass().getSimpleName() + " reset_by_hbm_off=true";
+            Log.e(TAG, "Cannot finish scan context after HBM reset", e);
+        }
+        mScanContextToken = 0;
+    }
+
+    private void writeNodeTimed(String path, boolean enabled) throws IOException {
+        long startedAt = SystemClock.uptimeMillis();
+        boolean succeeded = false;
+        try {
+            writeNode(path, enabled);
+            succeeded = true;
+        } finally {
+            String timing = "started_uptime_ms=" + startedAt + " duration_ms="
+                    + (SystemClock.uptimeMillis() - startedAt) + " success=" + succeeded;
+            if (HBM.equals(path)) {
+                mLastHbmOffWrite = timing;
+            } else {
+                if (enabled) mLastUiOnWrite = timing;
+                else mLastUiOffWrite = timing;
+            }
+        }
+    }
+
+    private String readHbm() throws IOException {
+        String state = Files.readString(Path.of(HBM)).trim();
+        if (!"0".equals(state) && !"1".equals(state)) {
+            throw new IOException("Invalid HBM state: " + state);
+        }
+        mLastHbmObservation = "uptime_ms=" + SystemClock.uptimeMillis() + " state=" + state;
+        return state;
+    }
+
+    private boolean clearHardware() {
+        long startedAt = SystemClock.uptimeMillis();
+        String previousState = mState;
+        boolean hadSurface = mWidth != 0;
+        boolean cleared = true;
+        boolean forcedOff = false;
+        // Revoke capture first. Removing the marked buffer lets the composer lower HBM
+        // alongside the unmasked frame, rather than darkening a still-compensated frame.
+        try { writeNodeTimed(UI_READY, false); }
+        catch (IOException e) { cleared = false; Log.e(TAG, "Cannot clear UI-ready", e); }
+        long hideStartedAt = SystemClock.uptimeMillis();
+        boolean hidden = nativeHide();
+        long hideMs = SystemClock.uptimeMillis() - hideStartedAt;
+        try {
+            forcedOff = !"0".equals(readHbm());
+            // Always release a stale sysfs override, including while the display is OFF:
+            // readback can be zero while the old request remains latched. After a normal
+            // composer removal the driver is already OFF and this sends no panel command.
+            writeNodeTimed(HBM, false);
+            if (!"0".equals(readHbm())) throw new IOException("Panel did not leave HBM");
+            endScanContext();
+            Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+            if (!hidden && display != null && isDrawable(display.getState())) {
+                throw new IOException("Compensation removal was not presented");
+            }
+        } catch (IOException e) { cleared = false; Log.e(TAG, "Cannot clear illumination", e); }
+        if (hadSurface || !cleared || forcedOff) {
+            mLastCleanupTiming = "started_uptime_ms=" + startedAt + " from_state="
+                    + previousState + " total_ms=" + (SystemClock.uptimeMillis() - startedAt)
+                    + " hide_ms=" + hideMs + " hide_presented=" + hidden
+                    + " forced_hbm_off=" + forcedOff + " success=" + cleared
+                    + " hbm={" + mLastHbmObservation + "} ui_off={" + mLastUiOffWrite + "}";
+            Log.i(TAG, "Illumination cleanup: " + mLastCleanupTiming);
+        }
+        if (mScanWakeLock != null && mScanWakeLock.isHeld()) mScanWakeLock.release();
+        mWidth = mHeight = 0;
+        mState = cleared ? "idle" : "hardware reset failed";
+        return cleared;
+    }
+
+    private void abortCurrent(String reason) {
+        Request request;
+        synchronized (mLock) { request = mOwner; }
+        if (request != null) fail(request, reason);
+    }
+
+    private void fail(Request request, String reason) {
+        synchronized (mLock) {
+            if (!currentLocked(request)) return;
+            releaseLocked(request);
+        }
+        mLastFailure = "generation=" + request.generation + " state=" + mState
+                + " elapsed_ms=" + (SystemClock.uptimeMillis() - request.startedAt)
+                + " reason=" + reason;
+        clearHardware();
+        Log.e(TAG, "Illumination aborted: " + mLastFailure);
+        try { request.client.onFailure(); }
+        catch (RemoteException ignored) { /* Dead HAL is already detached. */ }
+    }
+
+    private static native boolean nativeShow(int width, int height, int layerStack, float x,
+            float y, float radiusX, float radiusY, float alpha, long generation);
+    private static native void nativeSetGeneration(long generation);
+    private static native boolean nativeHide();
+    private static native String nativeGetDiagnostics();
+}

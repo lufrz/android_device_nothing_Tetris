@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: 2026 The LineageOS Project
+// SPDX-License-Identifier: Apache-2.0
+
+android_app {
+    name: "TetrisUdfpsIllumination",
+    srcs: ["src/**/*.java"],
+    resource_dirs: ["res"],
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+    static_libs: ["vendor.nothing.hardware.udfps-V1-java"],
+    jni_libs: ["libtetris_udfps_surface"],
+    required: ["tetris_udfps_framework_manifest"],
+    optimize: { enabled: false },
+}
+
+cc_library_shared {
+    name: "libtetris_udfps_surface",
+    srcs: ["jni/IlluminationSurface.cpp"],
+    system_ext_specific: true,
+    shared_libs: ["libbinder", "libgui", "liblog", "libui", "libutils"],
+    header_libs: ["jni_headers"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+prebuilt_etc {
+    name: "tetris_udfps_framework_manifest",
+    src: "manifest.xml",
+    filename: "tetris_udfps.xml",
+    sub_dir: "vintf/manifest",
+    system_ext_specific: true,
+}
