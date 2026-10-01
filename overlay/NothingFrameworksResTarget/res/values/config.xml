@@ -411,6 +411,9 @@
          we only enabled it while the device has ability of mixed color spaces composition -->
     <bool name="config_enableWcgMode">true</bool>
 
+    <!-- Device illumination supports both 60 and 120 Hz without a refresh-rate vote. -->
+    <bool name="config_ignoreUdfpsVote">true</bool>
+
     <!-- Whether to enable fp unlock when screen turns off on udfps devices -->
     <bool name="config_screen_off_udfps_enabled">true</bool>
 
