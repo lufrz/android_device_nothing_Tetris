@@ -470,7 +470,8 @@ public final class DisplayLifecycleTest {
  }
  static void scanContextLifecycle(){
   Client c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
-  check(c.failures==0&&TestHooks.contextBegins==1&&TestHooks.shownModes.equals(java.util.List.of("interactive")),
+  check(c.failures==0&&TestHooks.contextBegins==1&&power.interactiveQueries==2
+    &&TestHooks.shownModes.equals(java.util.List.of("interactive")),
     "already interactive ON capture must publish exactly one interactive token before rendering");
   long first=TestHooks.contextToken;check(first>0,"scan token must be positive");
   begin(c);Handler.runDue();check(TestHooks.contextBegins==1,"duplicate owner begin must not renew context");
@@ -480,14 +481,16 @@ public final class DisplayLifecycleTest {
   check(hide<off&&off<end&&TestHooks.contextToken==0&&!TestHooks.hbm,
     "end token must follow presented hide and HBM0 cleanup");
   c=setup(Display.STATE_ON);power.interactive=false;begin(c);Handler.runDue();
-  check(TestHooks.shownModes.equals(java.util.List.of("ambient")),
-    "a display already ON during a noninteractive AOD pulse must remain ambient");
+  check(TestHooks.contextBegins==1&&power.interactiveQueries==2
+    &&TestHooks.shownModes.equals(java.util.List.of("ambient")),
+    "a display already ON during a known noninteractive AOD pulse must remain ambient");
   power.interactive=true;service.end(c);Handler.runDue();
   check(TestHooks.contextBegins==1&&TestHooks.contextToken==0,"unlock before OFF must not reclassify the token");
   c=setup(Display.STATE_OFF);begin(c);Handler.runDue();power.interactive=true;
   displays.change(Display.STATE_ON);Handler.runDue();
-  check(TestHooks.shownModes.equals(java.util.List.of("ambient")),
-    "noninteractive origin must never upgrade after display wake");
+  check(TestHooks.contextBegins==1&&power.interactiveQueries==2
+    &&TestHooks.shownModes.equals(java.util.List.of("ambient")),
+    "known noninteractive origin must never upgrade after display wake");
   service.end(c);Handler.runDue();
   c=setup(Display.STATE_ON);displays.display.committedState=Display.STATE_OFF;
   begin(c);Handler.runDue();power.interactive=false;displays.commit(Display.STATE_ON);Handler.runDue();
@@ -528,12 +531,44 @@ public final class DisplayLifecycleTest {
   c=setup(Display.STATE_ON);TestHooks.contextFault="close";TestHooks.afterContext=()->TestHooks.failReset=true;
   begin(c);Handler.runDue();check(c.failures==1&&TestHooks.shows==0&&!TestHooks.ui,
     "failed reset after ambiguous accepted context must abort instead of rendering");
-  for(int failedQuery:new int[]{1,2}){
-   c=setup(Display.STATE_ON);power.failQueryAt=failedQuery;begin(c);Handler.runDue();
-   check(!TestHooks.shownModes.contains("interactive"),"unavailable interactivity must fail closed");
-   service.end(c);Handler.runDue();
-  }
   System.out.println("PASS: scan context interactive/AOD origin, no upgrade, downgrade, cancellation, replacement, death, old-kernel fallback and ambiguous-write reset");
+ }
+ static void scanContextUnknownPower(){
+  for(boolean initiallyInteractive:new boolean[]{false,true})for(int failedQuery:new int[]{1,2}){
+   Client c=setup(Display.STATE_ON);power.interactive=initiallyInteractive;power.failQueryAt=failedQuery;
+   begin(c);Handler.runDue();
+   check(power.interactiveQueries==2,"both initial and final power state must be sampled, including ambient origin");
+   check(c.failures==0&&TestHooks.contextBegins==0&&TestHooks.contextToken==0
+     &&TestHooks.shownModes.equals(java.util.List.of("none"))&&TestHooks.hbm&&!TestHooks.ui&&power.lock.isHeld(),
+     "unknown initial/final power state must skip all context publication and preserve baseline presentation");
+   check(dump().contains("skipped=power_state_unavailable"),"unknown power classification must be explicit in diagnostics");
+   Handler.advance(16);check(!TestHooks.ui,"unknown classification must retain the panel settle interval");
+   Handler.advance(1);Application.runMain();
+   check(c.failures==0&&TestHooks.ui&&TestHooks.hbm&&power.lock.isHeld(),
+     "unknown classification must not fail optical readiness or capture");
+   check(Application.broadcasts.size()==(!initiallyInteractive&&failedQuery==2?1:0),
+     "unknown context classification must preserve existing initial-state AOD pulse policy");
+   service.end(c);Handler.runDue();
+   check(TestHooks.contextToken==0&&!TestHooks.ui&&!TestHooks.hbm&&!power.lock.isHeld(),
+     "capture without context must retain normal cleanup");
+  }
+  for(int failedQuery:new int[]{1,2}){
+   Client previous=setup(Display.STATE_ON);begin(previous);Handler.runDue();Handler.advance(17);
+   long previousToken=TestHooks.contextToken;
+   power.failQueryAt=power.interactiveQueries+failedQuery;Client unknown=new Client();begin(unknown);Handler.runDue();Handler.advance(17);
+   check(unknown.failures==0&&TestHooks.contextBegins==1&&TestHooks.contextToken==0&&TestHooks.ui
+     &&TestHooks.shownModes.equals(java.util.List.of("interactive","none"))
+     &&TestHooks.events.contains("scan_v1 end "+previousToken),
+     "unknown replacement must revoke the previous token and capture without inheriting its mode");
+   Client known=new Client();begin(known);Handler.runDue();Handler.advance(17);long knownToken=TestHooks.contextToken;
+   check(knownToken>previousToken&&TestHooks.contextBegins==2&&TestHooks.contextMode.equals("interactive"),
+     "a later known owner must publish its own context after an unknown replacement");
+   previous.die();unknown.die();service.end(previous);service.end(unknown);Handler.runDue();
+   check(TestHooks.contextToken==knownToken&&TestHooks.hbm&&TestHooks.ui,
+     "stale owners must not revoke the newer known owner's token");
+   service.end(known);Handler.runDue();
+  }
+  System.out.println("PASS: unknown initial/final power state skips all scan context, preserves capture/settle/AOD policy, revokes prior token and protects newer owner");
  }
  static float expectedAlpha(float brightness){
   android.content.res.Resources r=new android.content.res.Resources();
@@ -824,6 +859,7 @@ public final class DisplayLifecycleTest {
   preparationEligibility();preparationCoalescingAndReuse();
   preparationTouchAndStaleCompletion();preparationDelayedWorkerRateLimit();preparationFailuresAndGeometry();
   scanContextLifecycle();
+  scanContextUnknownPower();
   optionalHbmTiming();
   committedDisplayGate();
   dozeScanGate();

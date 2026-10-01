@@ -323,12 +323,12 @@ public final class IlluminationApplication extends Application {
                 && info.state == Display.STATE_ON && info.committedState == Display.STATE_ON;
     }
 
-    private boolean isInteractiveForScan() {
+    private Boolean isInteractiveForScan() {
         try {
-            return mPowerManager != null && mPowerManager.isInteractive();
+            return mPowerManager == null ? null : mPowerManager.isInteractive();
         } catch (RuntimeException e) {
-            Log.e(TAG, "Interactive state unavailable; retaining ambient scan timing", e);
-            return false;
+            Log.e(TAG, "Interactive state unavailable; skipping scan context", e);
+            return null;
         }
     }
 
@@ -373,7 +373,7 @@ public final class IlluminationApplication extends Application {
                     request.interactiveAtStart = mPowerManager.isInteractive();
                     request.interactiveStateKnown = true;
                 } catch (RuntimeException e) {
-                    Log.w(TAG, "Initial interactive state unavailable; retaining ambient timing", e);
+                    Log.w(TAG, "Initial interactive state unavailable; skipping scan context", e);
                 }
                 DisplayInfo initialInfo = new DisplayInfo();
                 if (display.getDisplayInfo(initialInfo)) {
@@ -449,11 +449,7 @@ public final class IlluminationApplication extends Application {
             synchronized (mLock) {
                 if (!currentLocked(request)) return;
             }
-            // A pulse can already be ON while the phone remains non-interactive.
-            // Never upgrade an ambient request if unlocking wakes the phone later.
-            boolean interactive = request.contextClassified && request.interactiveAtStart
-                    && isInteractiveForScan();
-            publishScanContext(request, interactive);
+            publishScanContext(request);
             mState = "waiting for presentation";
             // JNI waits at most 500 ms for the actual present fence, off the main/binder threads.
             long showStartedAt = SystemClock.uptimeMillis();
@@ -571,7 +567,7 @@ public final class IlluminationApplication extends Application {
             // Sample framework state outside the capture lock: these getters can use Binder.
             Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
             displayReady = isScanReady(display);
-            // Unlike ambient scan timing, an unknown power state must not request UI.
+            // An unknown power state must not request UI.
             PowerManager powerManager = mPowerManager;
             interactive = powerManager == null || powerManager.isInteractive();
         } catch (RuntimeException e) {
@@ -634,8 +630,20 @@ public final class IlluminationApplication extends Application {
         }
     }
 
-    private void publishScanContext(Request request, boolean interactive) throws IOException {
-        String mode = interactive ? "interactive" : "ambient";
+    private void publishScanContext(Request request) throws IOException {
+        Boolean interactiveNow = isInteractiveForScan();
+        if (!current(request)) return;
+        if (!request.contextClassified || !request.interactiveStateKnown || interactiveNow == null) {
+            // An unknown power state must not opt into either synchronized scan path.
+            // The worker serializes token cleanup before any newer owner can publish.
+            endScanContext();
+            mLastScanContext = "generation=" + request.generation
+                    + " skipped=power_state_unavailable";
+            return;
+        }
+        // A pulse may already be ON while non-interactive. Never upgrade its origin
+        // to interactive if unlocking wakes the phone before rendering.
+        String mode = request.interactiveAtStart && interactiveNow ? "interactive" : "ambient";
         long startedAt = SystemClock.uptimeMillis();
         try {
             // The versioned prefix is rejected by older kernels, without toggling HBM.
@@ -776,7 +784,8 @@ public final class IlluminationApplication extends Application {
         }
         try {
             Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
-            if (display == null || !isScanReady(display) || !isInteractiveForScan()) return null;
+            if (display == null || !isScanReady(display)
+                    || !Boolean.TRUE.equals(isInteractiveForScan())) return null;
             Point size = new Point();
             display.getRealSize(size);
             int rotation = display.getRotation();
