@@ -3,6 +3,7 @@
 package org.lineageos.tetris.udfps;
 
 import android.app.Application;
+import android.content.Intent;
 import android.content.res.Resources;
 import android.graphics.Point;
 import android.hardware.display.BrightnessInfo;
@@ -39,6 +40,8 @@ public final class IlluminationApplication extends Application {
     private static final String HBM = "/sys/devices/platform/soc/1401a000.dsi0/hbm";
     private static final String UI_READY = "/sys/panel_feature/ui_status";
     private static final String HBM_TIMING = HBM + "_timing";
+    private static final String AOD_PULSE_ACTION = "com.android.systemui.doze.pulse";
+    private static final String SYSTEM_UI_PACKAGE = "com.android.systemui";
     private static final long MAX_SCAN_MS = 10_000;
     private static final long DISPLAY_READY_TIMEOUT_MS = 2_000;
     private static final long WAKE_LOCK_TIMEOUT_MS = MAX_SCAN_MS + DISPLAY_READY_TIMEOUT_MS;
@@ -80,6 +83,7 @@ public final class IlluminationApplication extends Application {
     private volatile String mLastUiOffWrite = "none";
     private volatile String mLastScanContext = "none";
     private volatile String mLastScanContextEnd = "none";
+    private volatile String mLastAodPulse = "none";
     private long mScanContextToken;
     private int mWidth;
     private int mHeight;
@@ -208,6 +212,7 @@ public final class IlluminationApplication extends Application {
             out.println("lastCleanup=" + mLastCleanupTiming);
             out.println("hbmControl=composer-buffer");
             out.println("displayWake=systemui-doze");
+            out.println("aodPulse=" + mLastAodPulse);
             out.println("hbmObservation=" + mLastHbmObservation);
             Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
             out.println("display=" + (display == null ? "missing"
@@ -254,6 +259,10 @@ public final class IlluminationApplication extends Application {
         boolean committedOnObserved;
         boolean contextClassified;
         boolean interactiveAtStart;
+        boolean interactiveStateKnown;
+        int initialDisplayState = Display.STATE_UNKNOWN;
+        int initialCommittedState = Display.STATE_UNKNOWN;
+        boolean aodPulseHandled;
         Request(IIlluminationCallback callback, int x, int y, int radius, long generation) {
             client = callback;
             token = callback.asBinder();
@@ -360,7 +369,17 @@ public final class IlluminationApplication extends Application {
                 mScanWakeLock = wakeLock;
             }
             if (!request.contextClassified) {
-                request.interactiveAtStart = isInteractiveForScan();
+                try {
+                    request.interactiveAtStart = mPowerManager.isInteractive();
+                    request.interactiveStateKnown = true;
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "Initial interactive state unavailable; retaining ambient timing", e);
+                }
+                DisplayInfo initialInfo = new DisplayInfo();
+                if (display.getDisplayInfo(initialInfo)) {
+                    request.initialDisplayState = initialInfo.state;
+                    request.initialCommittedState = initialInfo.committedState;
+                }
                 request.contextClassified = true;
                 mLastStartTiming += " interactive_at_start=" + request.interactiveAtStart;
             }
@@ -496,6 +515,7 @@ public final class IlluminationApplication extends Application {
                 }
                 writeNodeTimed(UI_READY, true);
                 mState = "illuminating";
+                queueVisibleAodPulseLocked(request);
             }
             mLastStartTiming += " ui_ready_elapsed_ms="
                     + (SystemClock.uptimeMillis() - request.startedAt);
@@ -503,6 +523,98 @@ public final class IlluminationApplication extends Application {
                     + mLastUiOnWrite + "} brightness=" + mBrightness + " alpha=" + mAlpha);
         } catch (IOException | RuntimeException e) {
             fail(request, e.toString());
+        }
+    }
+
+    private void queueVisibleAodPulseLocked(Request request) {
+        if (!currentLocked(request) || request.aodPulseHandled) return;
+        request.aodPulseHandled = true;
+        String prefix = "generation=" + request.generation + " ";
+        if (!request.contextClassified || !request.interactiveStateKnown
+                || request.interactiveAtStart) {
+            mLastAodPulse = prefix + "skipped=interactive";
+            return;
+        }
+        if (request.initialDisplayState == Display.STATE_UNKNOWN
+                || request.initialCommittedState == Display.STATE_UNKNOWN) {
+            mLastAodPulse = prefix + "skipped=initial_display_unavailable";
+            return;
+        }
+        if (isDozeState(request.initialDisplayState)
+                || isDozeState(request.initialCommittedState)) {
+            // The always-on UI is already present. Leave its policy to SystemUI.
+            mLastAodPulse = prefix + "skipped=already_aod";
+            return;
+        }
+        mLastAodPulse = prefix + "queued";
+        try {
+            // The display pulse, presentation and sensor readiness have already succeeded.
+            // Do not put ActivityManager IPC on the capture worker or make capture wait
+            // for SystemUI. No setting is changed and no extra wake-up is requested.
+            getMainExecutor().execute(() -> dispatchVisibleAodPulse(request));
+        } catch (RuntimeException e) {
+            mLastAodPulse = prefix + "failed=queue " + e.getClass().getSimpleName();
+            Log.w(TAG, "Unable to queue the visible AOD pulse", e);
+        }
+    }
+
+    private static boolean isDozeState(int state) {
+        return state == Display.STATE_DOZE || state == Display.STATE_DOZE_SUSPEND;
+    }
+
+    private void dispatchVisibleAodPulse(Request request) {
+        String prefix = "generation=" + request.generation + " ";
+        if (!current(request)) return;
+        boolean displayReady;
+        boolean interactive;
+        try {
+            // Sample framework state outside the capture lock: these getters can use Binder.
+            Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
+            displayReady = isScanReady(display);
+            // Unlike ambient scan timing, an unknown power state must not request UI.
+            PowerManager powerManager = mPowerManager;
+            interactive = powerManager == null || powerManager.isInteractive();
+        } catch (RuntimeException e) {
+            synchronized (mLock) {
+                if (currentLocked(request)) {
+                    mLastAodPulse = prefix + "skipped=state_unavailable "
+                            + e.getClass().getSimpleName();
+                }
+            }
+            return;
+        }
+        Intent intent = new Intent(AOD_PULSE_ACTION).setPackage(SYSTEM_UI_PACKAGE)
+                .addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY | Intent.FLAG_RECEIVER_FOREGROUND);
+        synchronized (mLock) {
+            if (!currentLocked(request)) return;
+            if (!"illuminating".equals(mState) || !displayReady) {
+                mLastAodPulse = prefix + "skipped=display_not_ready";
+                return;
+            }
+            if (interactive) {
+                mLastAodPulse = prefix + "skipped=interactive_or_unavailable";
+                return;
+            }
+            mLastAodPulse = prefix + "dispatching";
+        }
+        // Ownership is checked at the dispatch decision. An in-flight broadcast may
+        // finish after finger-up, but must never hold up HAL cancellation or cleanup.
+        long startedAt = SystemClock.uptimeMillis();
+        String result;
+        try {
+            // This existing receiver is registered by the system-user SystemUI process.
+            // "requested" is not an acknowledgement that its UI has been presented.
+            sendBroadcastAsUser(intent, UserHandle.SYSTEM);
+            result = "requested";
+        } catch (RuntimeException e) {
+            result = "failed=broadcast " + e.getClass().getSimpleName();
+            Log.w(TAG, "Unable to request the visible AOD pulse", e);
+        }
+        synchronized (mLock) {
+            if (currentLocked(request)) {
+                mLastAodPulse = prefix + result + " duration_ms="
+                        + (SystemClock.uptimeMillis() - startedAt);
+            }
         }
     }
 

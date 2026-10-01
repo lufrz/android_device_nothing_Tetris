@@ -60,6 +60,14 @@ assert 'private static native ' not in app, "Unmocked JNI entry point"
 stubs = {
 "android/Manifest.java": '''package android; public final class Manifest {
  public static final class permission { public static final String DUMP="dump"; }}''',
+"android/content/Intent.java": '''package android.content; public class Intent {
+ public static final int FLAG_RECEIVER_REGISTERED_ONLY=0x40000000,FLAG_RECEIVER_FOREGROUND=0x10000000;
+ private final String action;private String targetPackage;private int flags;
+ public Intent(String action){this.action=action;}
+ public String getAction(){return action;}public Intent setPackage(String value){targetPackage=value;return this;}
+ public String getPackage(){return targetPackage;}public Intent addFlags(int value){flags|=value;return this;}
+ public Intent setFlags(int value){flags=value;return this;}public int getFlags(){return flags;}}
+''',
 "android/content/pm/PackageManager.java": '''package android.content.pm;
  public class PackageManager { public static final int PERMISSION_GRANTED=0; }''',
 "android/content/res/Resources.java": '''package android.content.res;
@@ -68,6 +76,18 @@ stubs = {
  return switch(id) { case 1 -> 256; case 2 -> 2680; case 3 -> 4095; default -> 4; }; }}''',
 "android/app/Application.java": '''package android.app;
  public class Application { public static final java.util.Map<Class<?>,Object> services = new java.util.HashMap<>();
+ public record Broadcast(android.content.Intent intent,android.os.UserHandle user) {}
+ public static final java.util.List<Broadcast> broadcasts=new java.util.ArrayList<>();
+ public static RuntimeException broadcastFailure,executorFailure;
+ public static final java.util.ArrayDeque<Runnable> mainQueue=new java.util.ArrayDeque<>();
+ public java.util.concurrent.Executor getMainExecutor(){return task->{if(executorFailure!=null)throw executorFailure;mainQueue.add(task);};}
+ public static boolean runOneMain(){Runnable task=mainQueue.poll();if(task==null)return false;task.run();return true;}
+ public static void runMain(){int guard=100;while(runOneMain())if(--guard==0)throw new AssertionError("main executor loop");}
+ public static java.util.function.Consumer<android.content.Intent> beforeBroadcast=ignored->{};
+ public static Runnable afterBroadcast=()->{};
+ public void sendBroadcastAsUser(android.content.Intent intent,android.os.UserHandle user){
+  broadcasts.add(new Broadcast(intent,user));beforeBroadcast.accept(intent);
+  if(broadcastFailure!=null)throw broadcastFailure;afterBroadcast.run();}
  public void onCreate() {} public <T> T getSystemService(Class<T> type) { return type.cast(services.get(type)); }
  public android.content.res.Resources getResources() { return new android.content.res.Resources(); }
  public int checkCallingOrSelfPermission(String permission) { return 0; }}''',
@@ -85,7 +105,10 @@ stubs = {
  protected void dump(java.io.FileDescriptor fd,java.io.PrintWriter out,String[] args) {} }''',
 "android/os/Process.java": 'package android.os; public class Process { public static final int SYSTEM_UID=1000,THREAD_PRIORITY_BACKGROUND=10; }',
 "android/os/UserHandle.java": '''package android.os; public class UserHandle {
- public static final int USER_SYSTEM=0; public static int myUserId() { return 0; }}''',
+ public static final int USER_SYSTEM=0;
+ public static final UserHandle SYSTEM=new UserHandle(0),CURRENT=new UserHandle(-2);
+ private final int identifier;public UserHandle(int id){identifier=id;}public int getIdentifier(){return identifier;}
+ public static int myUserId() { return 0; }}''',
 "android/os/SystemClock.java": '''package android.os; public class SystemClock {
  public static long now; public static long uptimeMillis() { return now; }}''',
 "android/os/HandlerThread.java": '''package android.os; public class HandlerThread {
@@ -118,7 +141,8 @@ stubs = {
 "android/os/PowerManager.java": '''package android.os; public class PowerManager {
  public static final int PARTIAL_WAKE_LOCK=1, WAKE_REASON_BIOMETRIC=17;
  public int wakes, interactiveQueries; public boolean interactive=true; public int failQueryAt=-1;
- public boolean isInteractive() { if(++interactiveQueries==failQueryAt)throw new IllegalStateException("power unavailable"); return interactive; }
+ public Runnable beforeInteractive=()->{};
+ public boolean isInteractive() { beforeInteractive.run();if(++interactiveQueries==failQueryAt)throw new IllegalStateException("power unavailable"); return interactive; }
  public final WakeLock lock=new WakeLock();
  public WakeLock newWakeLock(int level,String tag) { if(level!=PARTIAL_WAKE_LOCK) throw new AssertionError(); return lock; }
  public void wakeUp(long at,int reason,String details) { wakes++;
@@ -130,7 +154,8 @@ stubs = {
  public void release() { held=false; releases++; }} }''',
 "android/util/Log.java": '''package android.util; public class Log {
  public static int i(String t,String m) { return 0; } public static int e(String t,String m) { return 0; }
- public static int e(String t,String m,Throwable e) { return 0; }}''',
+ public static int e(String t,String m,Throwable e) { return 0; }
+ public static int w(String t,String m,Throwable e) { return 0; }}''',
 "android/hardware/display/BrightnessInfo.java": '''package android.hardware.display;
  public class BrightnessInfo { public float adjustedBrightness=.4f; }''',
 "android/view/DisplayInfo.java": 'package android.view; public class DisplayInfo { public int state,committedState; }',
@@ -184,7 +209,7 @@ stubs = {
  final class TestHooks { static int shows,hides;static boolean hbm,ui,hideSucceeded;
  static Runnable afterShow,afterContext,afterPrepare,afterHide;static int timingReads;static String timingMode;
  static String contextMode="none",contextFault="none";static long contextToken,generation;static int contextBegins,contextEnds;
- static boolean failReset;static final java.util.List<String> events=new java.util.ArrayList<>();
+ static boolean failReset,failUiOn;static final java.util.List<String> events=new java.util.ArrayList<>();
  static final java.util.List<String> shownModes=new java.util.ArrayList<>();
  record BufferKey(int width,int height,float x,float y,float rx,float ry,float alpha) {}
  static final java.util.List<BufferKey> cache=new java.util.ArrayList<>();
@@ -225,7 +250,7 @@ stubs = {
  }
  static void reset() { shows=hides=timingReads=0;hbm=ui=false;hideSucceeded=true;
   afterShow=afterContext=afterPrepare=afterHide=()->{};prepareCalls=prepareHits=0;prepareEpoch=0;prepareFault="none";readyKey=null;cache.clear();prepareKeys.clear();prepareStarts.clear();timingMode="missing";contextMode="none";contextFault="none";
-  contextToken=0;contextBegins=contextEnds=0;failReset=false;events.clear();shownModes.clear(); }
+  contextToken=0;contextBegins=contextEnds=0;failReset=failUiOn=false;events.clear();shownModes.clear(); }
  static String readHbmTiming() throws java.io.IOException { timingReads++;
   if(timingMode.equals("missing"))throw new java.nio.file.NoSuchFileException("hbm_timing");
   if(timingMode.equals("denied"))throw new java.nio.file.AccessDeniedException("hbm_timing");
@@ -234,7 +259,7 @@ stubs = {
  static void write(String path,boolean on) throws java.io.IOException {
   if(path.endsWith("/hbm")){events.add(on?"hbm1":"hbm0");if(on)throw new AssertionError("context must never force HBM on");
    if(failReset)throw new java.io.IOException("reset failed");hbm=false;contextToken=0;contextMode="none";
-  }else ui=on; }
+  }else{events.add(on?"ui1":"ui0");if(on&&failUiOn)throw new java.io.IOException("UI-ready failed");ui=on;} }
  static String readHbm() { return hbm?"1":"0"; }}''',
 }
 
@@ -254,13 +279,24 @@ public final class DisplayLifecycleTest {
   Handler.reset();TestHooks.reset();ServiceManager.service=null;service=null;power=new PowerManager();
   power.interactive=state==Display.STATE_ON;
   displays=new DisplayManager();displays.display.state=state;displays.display.committedState=state;
-  Application.services.clear();
+  Application.services.clear();Application.broadcasts.clear();Application.mainQueue.clear();Application.broadcastFailure=null;Application.executorFailure=null;
+  Application.afterBroadcast=()->{};Application.beforeBroadcast=intent->{
+   check(!Thread.holdsLock(ownerLock()),"broadcast IPC must not hold the capture ownership lock");
+   check(TestHooks.ui&&TestHooks.hbm,"visible pulse must be sent only after HBM and UI-ready succeed");
+   check(dump().contains("state=illuminating"),"capture state must be illuminating before optional broadcast");
+   TestHooks.events.add("aod-pulse");};
   if(powerAvailable)Application.services.put(PowerManager.class,power);
   Application.services.put(DisplayManager.class,displays);
   app=new IlluminationApplication();app.onCreate();Handler.runDue();service=(IIllumination)ServiceManager.service;
   check(service!=null,"startup must register a fresh illumination service");
   return new Client();}
  static void begin(Client client){service.begin(client,540,2109,93);}
+ static Object ownerLock(){try{var field=IlluminationApplication.class.getDeclaredField("mLock");
+  field.setAccessible(true);return field.get(app);}catch(ReflectiveOperationException e){throw new AssertionError(e);}}
+ static Object ownerRequest(){try{var field=IlluminationApplication.class.getDeclaredField("mOwner");
+  field.setAccessible(true);return field.get(app);}catch(ReflectiveOperationException e){throw new AssertionError(e);}}
+ static void readyAgain(Object request){try{var method=IlluminationApplication.class.getDeclaredMethod("ready",request.getClass());
+  method.setAccessible(true);method.invoke(app,request);}catch(ReflectiveOperationException e){throw new AssertionError(e);}}
  static String dump(){java.io.StringWriter text=new java.io.StringWriter();
   ((Binder)service).dumpForTest(new java.io.PrintWriter(text));return text.toString();}
  static String ownerGeneration(){
@@ -653,7 +689,138 @@ public final class DisplayLifecycleTest {
     "rotation mismatch must use normal rendering rather than a stale prepared shape");
   System.out.println("PASS: optional producer errors do not crash or retry-spin, new-key recovery, fallback brightness and exact transformed geometry");
  }
+ static Client ambientReady(){
+  Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();
+  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
+  check(c.failures==0&&TestHooks.hbm&&TestHooks.ui,"ambient fixture must retain successful first-contact readiness");
+  return c;}
+ static void noPulse(String why){Application.runMain();check(Application.broadcasts.isEmpty(),why);}
+ static void verifyPulseTarget(){
+  check(Application.broadcasts.size()==1,"one active ambient request must emit exactly one broadcast");
+  Application.Broadcast sent=Application.broadcasts.get(0);
+  check("com.android.systemui.doze.pulse".equals(sent.intent().getAction()),"pulse must use the existing SystemUI action");
+  check("com.android.systemui".equals(sent.intent().getPackage()),"pulse must target only SystemUI");
+  check(sent.user()==UserHandle.SYSTEM&&sent.user().getIdentifier()==0,"pulse must target the system-user receiver");
+  check(sent.intent().getFlags()==(android.content.Intent.FLAG_RECEIVER_REGISTERED_ONLY
+    |android.content.Intent.FLAG_RECEIVER_FOREGROUND),"pulse must reach an already registered receiver on the foreground broadcast queue");
+  check(power.wakes==0,"optional pulse must not replace Doze with full wake");}
+ static void visiblePulseReadinessAndOnce(){
+  Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();
+  check(Application.mainQueue.isEmpty()&&Application.broadcasts.isEmpty(),"OFF must not request visible pulse before display and illumination readiness");
+  displays.request(Display.STATE_ON);Handler.runDue();Handler.advance(50);
+  check(TestHooks.shows==0&&Application.mainQueue.isEmpty(),"requested ON alone cannot queue visible pulse while committed state is OFF");
+  displays.commit(Display.STATE_ON);Handler.runDue();
+  check(TestHooks.shows==1&&!TestHooks.ui&&Application.mainQueue.isEmpty(),"presentation must not request pulse before sensor readiness");
+  Handler.advance(16);check(Application.mainQueue.isEmpty(),"existing panel-settle wait still precedes optional pulse");
+  Handler.advance(1);check(TestHooks.ui&&Application.mainQueue.size()==1&&Application.broadcasts.isEmpty(),
+    "UI-ready must complete before a nonblocking main-executor dispatch is queued");
+  Object request=ownerRequest();readyAgain(request);displays.change(Display.STATE_ON);Handler.runDue();
+  check(Application.mainQueue.size()==1,"repeated readiness and display events must not duplicate the queued request");
+  power.beforeInteractive=()->check(!Thread.holdsLock(ownerLock()),"dispatch power IPC must occur outside ownership lock");
+  Application.runMain();power.beforeInteractive=()->{};verifyPulseTarget();
+  check(TestHooks.events.indexOf("aod-pulse")>TestHooks.events.indexOf("ui1"),"pulse send follows successful UI_READY write");
+  check(TestHooks.ui&&TestHooks.hbm&&c.failures==0&&dump().contains("requested"),"pulse must preserve capture and report a request, not claim visible acknowledgement");
+  readyAgain(request);Application.runMain();check(Application.broadcasts.size()==1,"completed dispatch is not renewed in the same request");
+  service.end(c);Handler.runDue();
+  Client next=new Client();begin(next);Handler.runDue();Handler.advance(17);Application.runMain();
+  check(Application.broadcasts.size()==2&&next.failures==0,"a later real contact may request its own one-shot pulse");
+  System.out.println("PASS: visible pulse queued after committed ON/HBM/UI-ready, no scan-worker IPC, correct action/package/user/flags and one attempt per contact");
+ }
+ static void visiblePulseOriginGates(){
+  Client c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
+  noPulse("interactive screen-on authentication must not request ambient UI");
+  c=setup(Display.STATE_OFF);power.interactive=true;begin(c);Handler.runDue();power.interactive=false;
+  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
+  noPulse("interactive origin must not become eligible when interactivity later changes");
+  for(int requested:new int[]{Display.STATE_DOZE,Display.STATE_DOZE_SUSPEND}){
+   c=setup(requested);displays.display.committedState=Display.STATE_OFF;begin(c);Handler.runDue();
+   displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
+   noPulse("existing requested AOD state must be preserved without an extra pulse");
+   check(c.failures==0&&TestHooks.ui,"AOD-origin filtering must not stop biometric capture");
+  }
+  for(int committed:new int[]{Display.STATE_DOZE,Display.STATE_DOZE_SUSPEND}){
+   c=setup(Display.STATE_OFF);displays.display.committedState=committed;begin(c);Handler.runDue();
+   displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
+   noPulse("existing committed AOD state must be preserved without an extra pulse");
+   check(c.failures==0&&TestHooks.ui,"committed AOD-origin filtering must not stop capture");
+  }
+  for(boolean unknownRequested:new boolean[]{false,true}){
+   c=setup(Display.STATE_OFF);
+   if(unknownRequested)displays.display.state=Display.STATE_UNKNOWN;else displays.display.committedState=Display.STATE_UNKNOWN;
+   begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
+   noPulse("unknown initial display state must not authorize optional AOD promotion");
+  }
+  c=setup(Display.STATE_OFF);power.failQueryAt=1;begin(c);Handler.runDue();
+  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
+  noPulse("unknown initial interactivity must retain ambient capture but not authorize optional pulse");
+  check(c.failures==0&&TestHooks.ui,"initial power-query failure must preserve established capture fallback");
+  c=setup(Display.STATE_ON);power.interactive=false;begin(c);Handler.runDue();Handler.advance(17);Application.runMain();
+  verifyPulseTarget();check(c.failures==0&&TestHooks.ui,"an already ON but noninteractive fingerprint pulse may show full UI");
+  System.out.println("PASS: interactive and unknown origins excluded, existing requested/committed AOD untouched, noninteractive ON pulse supported");
+ }
+ static void visiblePulseCancellationAndFailureGates(){
+  Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();service.end(c);displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
+  noPulse("contact cancelled before display readiness must not pulse");
+  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();service.end(c);Handler.runDue();Handler.advance(17);
+  noPulse("contact cancelled before UI-ready must not pulse");
+  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();TestHooks.hbm=false;Handler.advance(17);
+  noPulse("revoked HBM must fail readiness without sending visible pulse");check(c.failures==1,"revoked HBM remains a capture failure");
+  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();TestHooks.failUiOn=true;Handler.advance(17);
+  noPulse("failed UI-ready write must not queue visible pulse");check(c.failures==1&&!TestHooks.ui,"UI-ready write failure must remain visible");
+  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();displays.display.rotation=1;Handler.advance(17);
+  noPulse("changed geometry before readiness must not pulse");
+  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();Handler.advance(2000);
+  noPulse("display timeout must not leave a queued visible pulse");
+  c=ambientReady();check(Application.mainQueue.size()==1,"fixture needs queued pulse");service.end(c);Handler.runDue();
+  noPulse("release while main dispatch is pending must cancel visible pulse");
+  c=ambientReady();c.die();Handler.runDue();noPulse("owner death must cancel queued pulse");
+  c=ambientReady();power.interactive=true;noPulse("unlock before main dispatch must suppress late ambient pulse");
+  check(c.failures==0&&TestHooks.ui,"suppressed UI request must not disturb ongoing capture");
+  c=ambientReady();displays.display.state=Display.STATE_OFF;noPulse("requested power loss before dispatch suppresses pulse");
+  c=ambientReady();displays.display.committedState=Display.STATE_OFF;noPulse("committed power loss before dispatch suppresses pulse");
+  Client old=ambientReady();service.end(old);Client newer=new Client();begin(newer);Handler.runDue();Handler.advance(17);
+  check(Application.mainQueue.size()==2,"replacement fixture retains both callbacks for ownership testing");
+  check(Application.runOneMain()&&Application.broadcasts.isEmpty(),"stale main callback cannot send for a replacement owner");
+  Application.runMain();verifyPulseTarget();check(newer.failures==0&&TestHooks.ui,"new owner remains able to send its own pulse");
+  c=ambientReady();final Client cancelledDuringSample=c;
+  power.beforeInteractive=()->{power.beforeInteractive=()->{};service.end(cancelledDuringSample);Handler.runDue();};
+  noPulse("ownership must be rechecked after power/display IPC before dispatch decision");
+  check(dump().contains("owner=false")&&!TestHooks.hbm&&!TestHooks.ui,"sampling race must allow normal cancellation");
+  c=ambientReady();final Client replacedDuringSample=c;final Client activeAfterSample=new Client();
+  power.beforeInteractive=()->{power.beforeInteractive=()->{};service.end(replacedDuringSample);
+   begin(activeAfterSample);Handler.runDue();Handler.advance(17);};
+  check(Application.runOneMain()&&Application.broadcasts.isEmpty(),
+    "old dispatch must not borrow a replacement owner's illuminated state after sampling IPC");
+  Application.runMain();verifyPulseTarget();
+  check(activeAfterSample.failures==0&&TestHooks.ui,"replacement during sampling keeps its own one-shot pulse");
+  System.out.println("PASS: no pulse after failed readiness, cancellation, death, unlock, power loss, timeout or stale owner; main sampling races recheck ownership");
+ }
+ static void visiblePulseOptionalFailures(){
+  Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();
+  Application.executorFailure=new java.util.concurrent.RejectedExecutionException("executor unavailable");Handler.advance(17);
+  check(c.failures==0&&TestHooks.ui&&TestHooks.hbm&&Application.mainQueue.isEmpty()&&dump().contains("failed"),
+    "executor rejection must be diagnostic only, after successful readiness");
+  Application.executorFailure=null;readyAgain(ownerRequest());Application.runMain();
+  check(Application.broadcasts.isEmpty(),"failed enqueue may not retry repeatedly in the same contact");
+  for(RuntimeException fault:new RuntimeException[]{new SecurityException("broadcast denied"),new IllegalStateException("receiver unavailable")}){
+   c=ambientReady();Application.broadcastFailure=fault;Application.runMain();
+   check(Application.broadcasts.size()==1&&c.failures==0&&TestHooks.ui&&TestHooks.hbm&&dump().contains("failed"),
+    "broadcast failure must not fail or cancel fingerprint capture");
+   Application.broadcastFailure=null;readyAgain(ownerRequest());Application.runMain();
+   check(Application.broadcasts.size()==1,"failed send must remain one attempt for the contact");
+  }
+  c=ambientReady();power.failQueryAt=power.interactiveQueries+1;noPulse("unavailable current interactivity must fail closed for optional pulse");
+  check(c.failures==0&&TestHooks.ui,"dispatch dependency error must not fail biometric capture");
+  c=ambientReady();final Client releasedInIpc=c;
+  Application.afterBroadcast=()->{service.end(releasedInIpc);Handler.runDue();};
+  Application.runMain();
+  check(Application.broadcasts.size()==1&&c.failures==0&&!TestHooks.ui&&!TestHooks.hbm&&dump().contains("owner=false"),
+    "an already-decided broadcast may finish after release but cannot block or revive capture");
+  System.out.println("PASS: executor/broadcast/dependency failures remain optional, never retry-spin, and broadcast IPC permits cancellation");
+ }
  public static void main(String[] args){
+  visiblePulseReadinessAndOnce();visiblePulseOriginGates();
+  visiblePulseCancellationAndFailureGates();visiblePulseOptionalFailures();
   preparationEligibility();preparationCoalescingAndReuse();
   preparationTouchAndStaleCompletion();preparationDelayedWorkerRateLimit();preparationFailuresAndGeometry();
   scanContextLifecycle();
