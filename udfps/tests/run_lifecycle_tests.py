@@ -342,7 +342,7 @@ public final class DisplayLifecycleTest {
   Client c=setup(Display.STATE_DOZE);begin(c);Handler.runDue();String generation=ownerGeneration();
   check(TestHooks.shows==0&&!TestHooks.hbm&&!TestHooks.ui&&c.failures==0&&power.lock.isHeld(),
     "DOZE must wait for ON without rendering, HBM or UI-ready");
-  check(dump().contains("wait_from=state3"),"DOZE wait must be visible in diagnostics");
+  check(dump().contains("state=waiting for display")&&dump().contains("display=state3"),"DOZE wait must be visible in diagnostics");
   displays.change(Display.STATE_DOZE);Handler.runDue();Handler.advance(500);
   check(TestHooks.shows==0&&c.failures==0&&ownerGeneration().equals(generation),
     "repeated DOZE events must keep the same pending contact");
@@ -379,9 +379,7 @@ public final class DisplayLifecycleTest {
   check(TestHooks.shows==0&&!TestHooks.hbm&&!TestHooks.ui&&c.failures==0&&power.lock.isHeld(),
     "requested ON with committed OFF must wait without rendering, HBM or UI-ready");
   check(dump().contains("display=state2")&&dump().contains("displayCommitted=state1")
-    &&dump().contains("wait_from=state2 wait_committed_from=state1")
-    &&dump().contains("requested_on_observed_elapsed_ms=0")
-    &&!dump().contains("committed_on_observed_elapsed_ms="),
+    &&dump().contains("state=waiting for display"),
     "diagnostics must distinguish requested ON from uncommitted display power");
   displays.request(Display.STATE_ON);Handler.runDue();Handler.advance(123);
   check(TestHooks.shows==0&&c.failures==0&&ownerGeneration().equals(generation),
@@ -390,10 +388,9 @@ public final class DisplayLifecycleTest {
   check(displays.committedOnlyCallbacks==1&&TestHooks.shows==1&&TestHooks.hbm&&!TestHooks.ui
     &&c.failures==0&&c.links==1&&ownerGeneration().equals(generation),
     "committed-only event must render the same contact without a basic display-changed event");
-  check(dump().contains("displayCommitted=state2")
-    &&dump().contains("committed_on_observed_elapsed_ms=123")
-    &&dump().contains("display=state2 display_committed=state2"),
-    "completion diagnostics must record when committed ON was first observed");
+  check(dump().contains("displayCommitted=state2")&&dump().contains("display=state2")
+    &&dump().contains("state=waiting for panel"),
+    "diagnostics must report committed ON while panel settling still gates capture");
   Handler.advance(17);check(TestHooks.ui,"committed ON still waits for panel settling before UI-ready");
   displays.commit(Display.STATE_ON);Handler.runDue();Handler.advance(2000);
   check(TestHooks.shows==1&&c.failures==0&&power.lock.isHeld(),
@@ -884,7 +881,7 @@ public final class DisplayLifecycleTest {
   check(TestHooks.shows==0&&c.failures==0&&!power.lock.isHeld(),"late ON after lift must stay cancelled");
   c=setup(Display.STATE_OFF);begin(c);Handler.runDue();
   String heldGeneration=ownerGeneration();
-  check(dump().contains("wait_from=state1")&&dump().contains("display_wait_started_uptime_ms=0")
+  check(dump().contains("state=waiting for display")&&dump().contains("display=state1")
     &&dump().contains("displayWake=systemui-doze"),"waiting diagnostics must identify the SystemUI pulse owner");
   Handler.advance(499);
   check(c.failures==0&&c.links==1&&TestHooks.shows==0&&!TestHooks.ui&&power.lock.isHeld()

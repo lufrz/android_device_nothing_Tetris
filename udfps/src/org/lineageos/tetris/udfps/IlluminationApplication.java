@@ -62,7 +62,6 @@ public final class IlluminationApplication extends Application {
     private long mPreparationStableSince;
     private long mLastPreparationStartedAt = -PREPARATION_INTERVAL_MS;
     private volatile String mPreparationState = "waiting for sensor geometry";
-    private volatile String mLastPreparation = "none";
     private final Runnable mPrepareWhenStable = this::prepareWhenStable;
     private DisplayManager mDisplayManager;
     private PowerManager mPowerManager;
@@ -75,14 +74,13 @@ public final class IlluminationApplication extends Application {
     private volatile String mLastFailure = "none";
     private volatile float mBrightness = Float.NaN;
     private volatile float mAlpha = Float.NaN;
-    private volatile String mLastStartTiming = "none";
-    private volatile String mLastCleanupTiming = "none";
-    private volatile String mLastHbmObservation = "none";
-    private volatile String mLastHbmOffWrite = "none";
-    private volatile String mLastUiOnWrite = "none";
-    private volatile String mLastUiOffWrite = "none";
+    // Keep capture diagnostics as values; format them only when dumpsys is requested.
+    private volatile long mLastReadyElapsedMs = -1;
+    private volatile boolean mLastHidePresented;
+    private volatile boolean mLastForcedHbmOff;
+    private volatile boolean mLastCleanupSucceeded;
+    private volatile String mLastHbmState = "unknown";
     private volatile String mLastScanContext = "none";
-    private volatile String mLastScanContextEnd = "none";
     private volatile String mLastAodPulse = "none";
     private long mScanContextToken;
     private int mWidth;
@@ -131,7 +129,6 @@ public final class IlluminationApplication extends Application {
                 }
                 Display display = mDisplayManager.getDisplay(id);
                 if (owner.waitingForDisplay) {
-                    recordDisplayProgress(owner, display);
                     // SystemUI pulses asynchronously. Never block the worker for this listener.
                     if (display != null && isScanReady(display)) {
                         startRendering(owner);
@@ -140,7 +137,6 @@ public final class IlluminationApplication extends Application {
                 }
                 // A queued display event may arrive before start() begins waiting for the pulse.
                 if (!owner.renderingStarted) return;
-                recordDisplayProgress(owner, display);
                 Point size = new Point();
                 if (display != null) display.getRealSize(size);
                 // Both the requested and completed display power states must stay ON.
@@ -208,12 +204,13 @@ public final class IlluminationApplication extends Application {
                 out.println("generation=" + mGeneration + " owner=" + (mOwner != null));
             }
             out.println("lastFailure=" + mLastFailure);
-            out.println("lastStart=" + mLastStartTiming);
-            out.println("lastCleanup=" + mLastCleanupTiming);
+            out.println("lastReadyElapsedMs=" + mLastReadyElapsedMs);
+            out.println("lastCleanup=hide_presented=" + mLastHidePresented
+                    + " forced_hbm_off=" + mLastForcedHbmOff + " success=" + mLastCleanupSucceeded);
             out.println("hbmControl=composer-buffer");
             out.println("displayWake=systemui-doze");
             out.println("aodPulse=" + mLastAodPulse);
-            out.println("hbmObservation=" + mLastHbmObservation);
+            out.println("hbmState=" + mLastHbmState);
             Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
             out.println("display=" + (display == null ? "missing"
                     : Display.stateToString(display.getState())));
@@ -223,13 +220,8 @@ public final class IlluminationApplication extends Application {
                 out.println("powerManager=" + (mPowerManager != null));
                 out.println("scanWakeLock=" + (mScanWakeLock != null && mScanWakeLock.isHeld()));
             }
-            out.println("hbmOffWrite=" + mLastHbmOffWrite);
-            out.println("uiOnWrite=" + mLastUiOnWrite);
-            out.println("uiOffWrite=" + mLastUiOffWrite);
             out.println("scanContext=" + mLastScanContext);
-            out.println("scanContextEnd=" + mLastScanContextEnd);
             out.println("preparation=" + mPreparationState);
-            out.println("lastPreparation=" + mLastPreparation);
             out.println("native=" + nativeGetDiagnostics());
             // Optional read-only driver diagnostics; never part of capture readiness.
             try {
@@ -255,8 +247,6 @@ public final class IlluminationApplication extends Application {
         final long startedAt = SystemClock.uptimeMillis();
         boolean waitingForDisplay;
         boolean renderingStarted;
-        boolean requestedOnObserved;
-        boolean committedOnObserved;
         boolean contextClassified;
         boolean interactiveAtStart;
         boolean interactiveStateKnown;
@@ -304,8 +294,7 @@ public final class IlluminationApplication extends Application {
         mSensorX = request.x;
         mSensorY = request.y;
         mSensorRadius = request.radius;
-        mLastStartTiming = "generation=" + request.generation + " queued_ms="
-                + (SystemClock.uptimeMillis() - request.startedAt);
+        mLastReadyElapsedMs = -1;
         try {
             if (!clearHardware()) throw new IOException("Unable to reset fingerprint HBM");
             ensureDisplayReady(request);
@@ -332,19 +321,6 @@ public final class IlluminationApplication extends Application {
         }
     }
 
-    private void recordDisplayProgress(Request request, Display display) {
-        if (display == null || !current(request)) return;
-        long elapsed = SystemClock.uptimeMillis() - request.startedAt;
-        if (!request.requestedOnObserved && display.getState() == Display.STATE_ON) {
-            request.requestedOnObserved = true;
-            mLastStartTiming += " requested_on_observed_elapsed_ms=" + elapsed;
-        }
-        if (!request.committedOnObserved && isScanReady(display)) {
-            request.committedOnObserved = true;
-            mLastStartTiming += " committed_on_observed_elapsed_ms=" + elapsed;
-        }
-    }
-
     private static boolean isDrawable(int state) {
         return state == Display.STATE_ON || state == Display.STATE_DOZE;
     }
@@ -354,7 +330,6 @@ public final class IlluminationApplication extends Application {
             if (!currentLocked(request)) return;
             Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
             if (display == null) throw new IOException("Display is unavailable");
-            recordDisplayProgress(request, display);
             // A missing framework dependency must fail this request, not crash the
             // persistent process before its diagnostic Binder service is registered.
             if (mPowerManager == null) {
@@ -381,7 +356,6 @@ public final class IlluminationApplication extends Application {
                     request.initialCommittedState = initialInfo.committedState;
                 }
                 request.contextClassified = true;
-                mLastStartTiming += " interactive_at_start=" + request.interactiveAtStart;
             }
             // Bound the CPU hold independently of Java timeout delivery during suspend.
             mScanWakeLock.acquire(WAKE_LOCK_TIMEOUT_MS);
@@ -389,13 +363,9 @@ public final class IlluminationApplication extends Application {
                 request.waitingForDisplay = true;
                 mState = "waiting for display";
                 long waitStartedAt = SystemClock.uptimeMillis();
-                mLastStartTiming += " wait_from=" + Display.stateToString(display.getState())
-                        + " wait_committed_from=" + Display.stateToString(display.getCommittedState())
-                        + " display_wait_started_uptime_ms=" + waitStartedAt;
                 // The FOD wake-up sensor lets SystemUI request the fingerprint doze pulse.
                 // A full wake here races its proximity check and can end Doze before the
                 // held contact is delivered. Keep this request pending until that pulse.
-                Log.i(TAG, "Waiting for SystemUI doze pulse: " + mLastStartTiming);
                 mWorker.postAtTime(() -> {
                     if (current(request) && request.waitingForDisplay) {
                         fail(request, "SystemUI doze pulse timeout");
@@ -427,11 +397,6 @@ public final class IlluminationApplication extends Application {
             if (display == null || !isScanReady(display)) {
                 throw new IOException("Display is not ready for fingerprint capture");
             }
-            recordDisplayProgress(request, display);
-            mLastStartTiming += " drawable_elapsed_ms="
-                    + (SystemClock.uptimeMillis() - request.startedAt)
-                    + " display=" + Display.stateToString(display.getState())
-                    + " display_committed=" + Display.stateToString(display.getCommittedState());
             Point size = new Point();
             display.getRealSize(size);
             mWidth = size.x;
@@ -452,11 +417,8 @@ public final class IlluminationApplication extends Application {
             publishScanContext(request);
             mState = "waiting for presentation";
             // JNI waits at most 500 ms for the actual present fence, off the main/binder threads.
-            long showStartedAt = SystemClock.uptimeMillis();
             boolean presented = nativeShow(mWidth, mHeight, display.getLayerStack(), geometry.x, geometry.y,
                     geometry.radiusX, geometry.radiusY, mAlpha, request.generation);
-            mLastStartTiming += " show_ms=" + (SystemClock.uptimeMillis() - showStartedAt)
-                    + " presented=" + presented;
             if (!presented) {
                 throw new IOException("Compensation surface was not presented: "
                         + nativeGetDiagnostics());
@@ -479,9 +441,6 @@ public final class IlluminationApplication extends Application {
                 }
                 mState = "waiting for panel";
             }
-            mLastStartTiming += " hbm_on_elapsed_ms="
-                    + (SystemClock.uptimeMillis() - request.startedAt);
-            Log.i(TAG, "Composer HBM presented: " + mLastStartTiming);
             // The present fence covers the compositor frame. Readback is still a driver
             // state, not an optical measurement; retain two refresh periods for panel settling
             // before notifying Goodix, pending measurements on the device.
@@ -509,14 +468,11 @@ public final class IlluminationApplication extends Application {
                 if (!"1".equals(readHbm())) {
                     throw new IOException("Fingerprint HBM was revoked");
                 }
-                writeNodeTimed(UI_READY, true);
+                writeNode(UI_READY, true);
                 mState = "illuminating";
                 queueVisibleAodPulseLocked(request);
             }
-            mLastStartTiming += " ui_ready_elapsed_ms="
-                    + (SystemClock.uptimeMillis() - request.startedAt);
-            Log.i(TAG, "Illumination ready: " + mLastStartTiming + " write={"
-                    + mLastUiOnWrite + "} brightness=" + mBrightness + " alpha=" + mAlpha);
+            mLastReadyElapsedMs = SystemClock.uptimeMillis() - request.startedAt;
         } catch (IOException | RuntimeException e) {
             fail(request, e.toString());
         }
@@ -525,31 +481,30 @@ public final class IlluminationApplication extends Application {
     private void queueVisibleAodPulseLocked(Request request) {
         if (!currentLocked(request) || request.aodPulseHandled) return;
         request.aodPulseHandled = true;
-        String prefix = "generation=" + request.generation + " ";
         if (!request.contextClassified || !request.interactiveStateKnown
                 || request.interactiveAtStart) {
-            mLastAodPulse = prefix + "skipped=interactive";
+            mLastAodPulse = "skipped=interactive";
             return;
         }
         if (request.initialDisplayState == Display.STATE_UNKNOWN
                 || request.initialCommittedState == Display.STATE_UNKNOWN) {
-            mLastAodPulse = prefix + "skipped=initial_display_unavailable";
+            mLastAodPulse = "skipped=initial_display_unavailable";
             return;
         }
         if (isDozeState(request.initialDisplayState)
                 || isDozeState(request.initialCommittedState)) {
             // The always-on UI is already present. Leave its policy to SystemUI.
-            mLastAodPulse = prefix + "skipped=already_aod";
+            mLastAodPulse = "skipped=already_aod";
             return;
         }
-        mLastAodPulse = prefix + "queued";
+        mLastAodPulse = "queued";
         try {
             // The display pulse, presentation and sensor readiness have already succeeded.
             // Do not put ActivityManager IPC on the capture worker or make capture wait
             // for SystemUI. No setting is changed and no extra wake-up is requested.
             getMainExecutor().execute(() -> dispatchVisibleAodPulse(request));
         } catch (RuntimeException e) {
-            mLastAodPulse = prefix + "failed=queue " + e.getClass().getSimpleName();
+            mLastAodPulse = "failed=queue " + e.getClass().getSimpleName();
             Log.w(TAG, "Unable to queue the visible AOD pulse", e);
         }
     }
@@ -559,7 +514,6 @@ public final class IlluminationApplication extends Application {
     }
 
     private void dispatchVisibleAodPulse(Request request) {
-        String prefix = "generation=" + request.generation + " ";
         if (!current(request)) return;
         boolean displayReady;
         boolean interactive;
@@ -573,7 +527,7 @@ public final class IlluminationApplication extends Application {
         } catch (RuntimeException e) {
             synchronized (mLock) {
                 if (currentLocked(request)) {
-                    mLastAodPulse = prefix + "skipped=state_unavailable "
+                    mLastAodPulse = "skipped=state_unavailable "
                             + e.getClass().getSimpleName();
                 }
             }
@@ -584,18 +538,17 @@ public final class IlluminationApplication extends Application {
         synchronized (mLock) {
             if (!currentLocked(request)) return;
             if (!"illuminating".equals(mState) || !displayReady) {
-                mLastAodPulse = prefix + "skipped=display_not_ready";
+                mLastAodPulse = "skipped=display_not_ready";
                 return;
             }
             if (interactive) {
-                mLastAodPulse = prefix + "skipped=interactive_or_unavailable";
+                mLastAodPulse = "skipped=interactive_or_unavailable";
                 return;
             }
-            mLastAodPulse = prefix + "dispatching";
+            mLastAodPulse = "dispatching";
         }
         // Ownership is checked at the dispatch decision. An in-flight broadcast may
         // finish after finger-up, but must never hold up HAL cancellation or cleanup.
-        long startedAt = SystemClock.uptimeMillis();
         String result;
         try {
             // This existing receiver is registered by the system-user SystemUI process.
@@ -608,8 +561,7 @@ public final class IlluminationApplication extends Application {
         }
         synchronized (mLock) {
             if (currentLocked(request)) {
-                mLastAodPulse = prefix + result + " duration_ms="
-                        + (SystemClock.uptimeMillis() - startedAt);
+                mLastAodPulse = result;
             }
         }
     }
@@ -637,32 +589,27 @@ public final class IlluminationApplication extends Application {
             // An unknown power state must not opt into either synchronized scan path.
             // The worker serializes token cleanup before any newer owner can publish.
             endScanContext();
-            mLastScanContext = "generation=" + request.generation
-                    + " skipped=power_state_unavailable";
+            mLastScanContext = "skipped=power_state_unavailable";
             return;
         }
         // A pulse may already be ON while non-interactive. Never upgrade its origin
         // to interactive if unlocking wakes the phone before rendering.
         String mode = request.interactiveAtStart && interactiveNow ? "interactive" : "ambient";
-        long startedAt = SystemClock.uptimeMillis();
         try {
             // The versioned prefix is rejected by older kernels, without toggling HBM.
             writeScanContext("scan_v1 begin " + request.generation + " " + mode);
             mScanContextToken = request.generation;
-            mLastScanContext = "generation=" + request.generation + " mode=" + mode
-                    + " accepted=true started_uptime_ms=" + startedAt;
+            mLastScanContext = mode;
         } catch (IOException | SecurityException e) {
             // Even a close failure can follow an accepted write. Revoke any context
             // before falling back to the previous kernel path, with no surface yet.
-            mLastScanContext = "generation=" + request.generation + " mode=" + mode
-                    + " accepted=false started_uptime_ms=" + startedAt
-                    + " reason=" + e.getClass().getSimpleName();
-            writeNodeTimed(HBM, false);
+            mLastScanContext = "unavailable: " + e.getClass().getSimpleName();
+            writeNode(HBM, false);
             if (!"0".equals(readHbm())) {
                 throw new IOException("Cannot revoke fingerprint scan context", e);
             }
             mScanContextToken = 0;
-            Log.i(TAG, "Scan context unavailable; using previous kernel path: " + e);
+            Log.w(TAG, "Scan context unavailable; using previous kernel path", e);
         }
     }
 
@@ -673,31 +620,10 @@ public final class IlluminationApplication extends Application {
         // the context; the token-specific end is idempotent and cannot clear a newer one.
         try {
             writeScanContext("scan_v1 end " + token);
-            mLastScanContextEnd = "generation=" + token + " success=true";
         } catch (IOException | SecurityException e) {
-            mLastScanContextEnd = "generation=" + token + " success=false reason="
-                    + e.getClass().getSimpleName() + " reset_by_hbm_off=true";
             Log.e(TAG, "Cannot finish scan context after HBM reset", e);
         }
         mScanContextToken = 0;
-    }
-
-    private void writeNodeTimed(String path, boolean enabled) throws IOException {
-        long startedAt = SystemClock.uptimeMillis();
-        boolean succeeded = false;
-        try {
-            writeNode(path, enabled);
-            succeeded = true;
-        } finally {
-            String timing = "started_uptime_ms=" + startedAt + " duration_ms="
-                    + (SystemClock.uptimeMillis() - startedAt) + " success=" + succeeded;
-            if (HBM.equals(path)) {
-                mLastHbmOffWrite = timing;
-            } else {
-                if (enabled) mLastUiOnWrite = timing;
-                else mLastUiOffWrite = timing;
-            }
-        }
     }
 
     private String readHbm() throws IOException {
@@ -705,29 +631,24 @@ public final class IlluminationApplication extends Application {
         if (!"0".equals(state) && !"1".equals(state)) {
             throw new IOException("Invalid HBM state: " + state);
         }
-        mLastHbmObservation = "uptime_ms=" + SystemClock.uptimeMillis() + " state=" + state;
+        mLastHbmState = state;
         return state;
     }
 
     private boolean clearHardware() {
-        long startedAt = SystemClock.uptimeMillis();
-        String previousState = mState;
-        boolean hadSurface = mWidth != 0;
         boolean cleared = true;
         boolean forcedOff = false;
         // Revoke capture first. Removing the marked buffer lets the composer lower HBM
         // alongside the unmasked frame, rather than darkening a still-compensated frame.
-        try { writeNodeTimed(UI_READY, false); }
+        try { writeNode(UI_READY, false); }
         catch (IOException e) { cleared = false; Log.e(TAG, "Cannot clear UI-ready", e); }
-        long hideStartedAt = SystemClock.uptimeMillis();
         boolean hidden = nativeHide();
-        long hideMs = SystemClock.uptimeMillis() - hideStartedAt;
         try {
             forcedOff = !"0".equals(readHbm());
             // Always release a stale sysfs override, including while the display is OFF:
             // readback can be zero while the old request remains latched. After a normal
             // composer removal the driver is already OFF and this sends no panel command.
-            writeNodeTimed(HBM, false);
+            writeNode(HBM, false);
             if (!"0".equals(readHbm())) throw new IOException("Panel did not leave HBM");
             endScanContext();
             Display display = mDisplayManager.getDisplay(Display.DEFAULT_DISPLAY);
@@ -735,14 +656,9 @@ public final class IlluminationApplication extends Application {
                 throw new IOException("Compensation removal was not presented");
             }
         } catch (IOException e) { cleared = false; Log.e(TAG, "Cannot clear illumination", e); }
-        if (hadSurface || !cleared || forcedOff) {
-            mLastCleanupTiming = "started_uptime_ms=" + startedAt + " from_state="
-                    + previousState + " total_ms=" + (SystemClock.uptimeMillis() - startedAt)
-                    + " hide_ms=" + hideMs + " hide_presented=" + hidden
-                    + " forced_hbm_off=" + forcedOff + " success=" + cleared
-                    + " hbm={" + mLastHbmObservation + "} ui_off={" + mLastUiOffWrite + "}";
-            Log.i(TAG, "Illumination cleanup: " + mLastCleanupTiming);
-        }
+        mLastHidePresented = hidden;
+        mLastForcedHbmOff = forcedOff;
+        mLastCleanupSucceeded = cleared;
         if (mScanWakeLock != null && mScanWakeLock.isHeld()) mScanWakeLock.release();
         mWidth = mHeight = 0;
         mState = cleared ? "idle" : "hardware reset failed";
@@ -887,20 +803,17 @@ public final class IlluminationApplication extends Application {
                 Log.e(TAG, "Optional illumination preparation failed", e);
             }
             final boolean completed = prepared;
-            final long duration = SystemClock.uptimeMillis() - startedAt;
-            mWorker.post(() -> preparationFinished(key, token, completed, startedAt, duration));
+            mWorker.post(() -> preparationFinished(key, token, completed, startedAt));
         });
     }
 
     private void preparationFinished(PreparationKey key, long token, boolean prepared,
-            long startedAt, long duration) {
+            long startedAt) {
         // A background thread may start well after dispatch. Rate-limit the
         // actual work too, including when a stale job yields to the latest key.
         mLastPreparationStartedAt = Math.max(mLastPreparationStartedAt, startedAt);
         mPreparationRunning = false;
         boolean latest = token == mPreparationToken && key.matches(mDesiredPreparation);
-        mLastPreparation = "token=" + token + " prepared=" + prepared + " current=" + latest
-                + " duration_ms=" + duration + " alpha=" + key.alpha;
         if (latest && !prepared) {
             // No retry loop for memory/mapper failures at an unchanged brightness.
             // Normal scans retain the synchronous rendering path.
