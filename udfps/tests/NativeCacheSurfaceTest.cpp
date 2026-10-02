@@ -56,10 +56,10 @@ void hitAndMiss() {
     assert(gBuffer == first && first->bytes == originalPixels);
     assert(s.allocations == 1 && s.locks == 1 && s.unlocks == 1 && s.markerReads == 1);
     assert(s.surfaces == 2 && s.shows == 2 && s.bufferSubmits == 2);
-    assert(s.commits == 2 && s.showCallbacks == 2 && s.showWaits == 2);
+    assert(s.showCallbacks == 2 && s.showWaits == 2);
     assert(s.hides == 1 && s.hideWaits == 1 && s.detachedBeforeHide);
     assert(s.lastLayerStack == 9 && android::submittedSurfaces[0] != android::submittedSurfaces[1]);
-    assert(gLastPresent->bufferCacheHit && gLastPresent->rasterMs == 0);
+    assert(gLastPresent->bufferCacheHit);
     reason("presented");
     ++testCases;
 
@@ -134,6 +134,18 @@ void hitsStillRequirePresentation() {
     reason("cancelled_waiting_callback");
     assert(native_test::state.showCallbacks == 1 && native_test::state.showWaits == 1);
     ++testCases;
+
+    // A submitted transaction cannot acknowledge readiness without completion,
+    // and a completed transaction cannot acknowledge an unsignaled present fence.
+    for (bool missingCallback : {true, false}) {
+        reset();
+        if (missingCallback) native_test::state.showCallback = false;
+        else native_test::state.showFenceError = android::TIMED_OUT;
+        assert(!request());
+        reason(missingCallback ? "complete_callback_timeout" : "present_fence_timeout");
+        assert(gSurface == nullptr && gBuffer == nullptr);
+        ++testCases;
+    }
 }
 void hideFailuresAndDeath() {
     reset();

@@ -48,13 +48,9 @@ using BufferKey = tetris::udfps::IlluminationBufferKey;
 struct PreparedBuffer {
     BufferKey key{};
     sp<GraphicBuffer> buffer;
-    int64_t elapsedMs = 0;
-    int64_t rasterMs = 0;
 };
 struct PreparationState {
     uint64_t token = 0;
-    int64_t elapsedMs = 0;
-    int64_t rasterMs = 0;
     const char* result = "none";
 };
 std::mutex gPreparationMutex;
@@ -96,21 +92,9 @@ PreparedBuffer takePreparedBuffer(const BufferKey& key) {
 struct PresentState {
     std::mutex mutex;
     std::condition_variable condition;
-    const Clock::time_point started = Clock::now();
     int64_t generation = 0;
-    int64_t connectMs = -1;
-    int64_t bufferPrepareMs = -1;
-    int64_t rasterMs = -1;
-    int64_t bufferUnlockMs = -1;
-    int64_t surfaceCreateMs = -1;
-    int64_t submittedMs = -1;
-    int64_t committedMs = -1;
-    int64_t completedMs = -1;
-    int64_t fenceMs = -1;
     bool bufferCacheHit = false;
     bool bufferPrepared = false;
-    int64_t preparedElapsedMs = 0;
-    int64_t preparedRasterMs = 0;
     size_t bufferCacheEntries = 0;
     std::string result = "preparing";
     bool completed = false;
@@ -120,21 +104,19 @@ struct PresentState {
 
 std::mutex gDiagnosticsMutex;
 std::shared_ptr<PresentState> gLastPresent;
-std::string gLastHide = "none";
-
-int64_t elapsedMs(Clock::time_point since) {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - since).count();
-}
+struct HideState {
+    status_t status = NO_ERROR;
+    std::string result = "none";
+};
+HideState gLastHide;
 
 bool prepareBuffer(const BufferKey& key, uint64_t token) {
-    const auto started = Clock::now();
-    int64_t rasterMs = 0;
     const auto current = [token] {
         return token != 0 && gPreparationEpoch.load(std::memory_order_relaxed) == token;
     };
     const auto finish = [&](const char* result) {
         std::lock_guard lock(gPreparationMutex);
-        gLastPreparation = {token, elapsedMs(started), rasterMs, result};
+        gLastPreparation = {token, result};
         return false;
     };
     if (!validKey(key)) return finish("invalid_geometry");
@@ -156,32 +138,30 @@ bool prepareBuffer(const BufferKey& key, uint64_t token) {
         buffer->unlock();
         return finish("buffer_lock_failed");
     }
-    const auto rasterStarted = Clock::now();
     const bool complete = tetris::udfps::fillIlluminationCancellable(
             static_cast<uint8_t*>(address), key.width, key.height, buffer->getStride(),
             key.cx, key.cy, key.rx, key.ry, key.opacity, current);
-    rasterMs = elapsedMs(rasterStarted);
     const status_t unlocked = buffer->unlock();
     if (unlocked != NO_ERROR) return finish("buffer_unlock_failed");
     if (!complete || !current()) return finish("cancelled_during_prepare");
-    PreparedBuffer ready{key, buffer, elapsedMs(started), rasterMs};
+    PreparedBuffer ready{key, buffer};
     {
         std::lock_guard lock(gPreparationMutex);
         // Serialize the final epoch check and publication with cancellation and
         // invalidation. An older producer cannot republish after a failed hide.
         if (!current()) {
-            gLastPreparation = {token, elapsedMs(started), rasterMs, "cancelled_before_publish"};
+            gLastPreparation = {token, "cancelled_before_publish"};
             return false;
         }
         std::swap(ready, gPreparedBuffer);
-        gLastPreparation = {token, elapsedMs(started), rasterMs, "prepared"};
+        gLastPreparation = {token, "prepared"};
     }
     return true;
 }
 
 std::string diagnostics() {
     std::shared_ptr<PresentState> pending;
-    std::string lastHide;
+    HideState lastHide;
     {
         std::lock_guard lock(gDiagnosticsMutex);
         pending = gLastPresent;
@@ -191,28 +171,14 @@ std::string diagnostics() {
     if (pending != nullptr) {
         std::lock_guard lock(pending->mutex);
         out << "generation=" << pending->generation << " result=" << pending->result
-            << " started_uptime_ms="
-            << std::chrono::duration_cast<std::chrono::milliseconds>(
-                    pending->started.time_since_epoch()).count()
-            << " connect_ms=" << pending->connectMs
-            << " buffer_prepare_ms=" << pending->bufferPrepareMs
-            << " raster_ms=" << pending->rasterMs
-            << " buffer_unlock_ms=" << pending->bufferUnlockMs
-            << " surface_create_ms=" << pending->surfaceCreateMs
             << " buffer_cache=" << (pending->bufferCacheHit ? "hit" : "miss")
             << " buffer_origin=" << (pending->bufferCacheHit ? "cache"
                     : pending->bufferPrepared ? "prepared" : "rendered")
-            << " prepared_elapsed_ms=" << pending->preparedElapsedMs
-            << " prepared_raster_ms=" << pending->preparedRasterMs
-            << " cache_entries=" << pending->bufferCacheEntries
-            << " submit_ms=" << pending->submittedMs
-            << " commit_callback_ms=" << pending->committedMs
-            << " complete_callback_ms=" << pending->completedMs
-            << " fence_observed_ms=" << pending->fenceMs;
+            << " cache_entries=" << pending->bufferCacheEntries;
     } else {
         out << "presentation=none";
     }
-    out << " hide={" << lastHide << "}";
+    out << " hide={status=" << lastHide.status << " result=" << lastHide.result << "}";
     PreparationState preparation;
     bool ready;
     {
@@ -221,7 +187,6 @@ std::string diagnostics() {
         ready = gPreparedBuffer.buffer != nullptr;
     }
     out << " preparation={token=" << preparation.token << " result=" << preparation.result
-        << " elapsed_ms=" << preparation.elapsedMs << " raster_ms=" << preparation.rasterMs
         << " ready=" << ready << "}";
     return out.str();
 }
@@ -282,15 +247,11 @@ bool hide() {
         gBufferCache.clear();
         cancelPreparation(true);
     }
-    std::ostringstream timing;
-    timing << "started_uptime_ms="
-           << std::chrono::duration_cast<std::chrono::milliseconds>(started.time_since_epoch()).count()
-           << " total_ms=" << elapsedMs(started) << " status=" << status << " result=" << result;
     {
         std::lock_guard lock(gDiagnosticsMutex);
-        gLastHide = timing.str();
+        gLastHide = {status, result};
     }
-    ALOGI("Hide: %s", timing.str().c_str());
+    if (!presented) ALOGW("Hide failed: status=%d result=%s", status, result.c_str());
     return presented;
 }
 
@@ -309,7 +270,9 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
             std::lock_guard lock(pending->mutex);
             pending->result = reason;
         }
-        ALOGW("Presentation failed: %s", diagnostics().c_str());
+        if (reason.rfind("cancelled_", 0) != 0) {
+            ALOGW("Presentation failed: %s", reason.c_str());
+        }
         return false;
     };
     if (!hide()) return failed("previous_surface_removal_failed");
@@ -319,11 +282,6 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         ALOGE("Invalid illumination buffer geometry");
         return failed("invalid_geometry");
     }
-    const auto recordPhase = [&pending](int64_t PresentState::*field, Clock::time_point started) {
-        std::lock_guard lock(pending->mutex);
-        pending.get()->*field = elapsedMs(started);
-    };
-    auto phaseStarted = Clock::now();
     if (gClient == nullptr) {
         ProcessState::self()->startThreadPool();
         gClient = sp<SurfaceComposerClient>::make();
@@ -335,12 +293,10 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
             return failed("surfaceflinger_connection_failed");
         }
     }
-    recordPhase(&PresentState::connectMs, phaseStarted);
     gBuffer = gBufferCache.find(key);
     {
         std::lock_guard lock(pending->mutex);
         pending->bufferCacheHit = gBuffer != nullptr;
-        pending->bufferPrepareMs = pending->rasterMs = pending->bufferUnlockMs = 0;
     }
     if (gBuffer == nullptr) {
         auto ready = takePreparedBuffer(key);
@@ -348,12 +304,9 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
             gBuffer = std::move(ready.buffer);
             std::lock_guard lock(pending->mutex);
             pending->bufferPrepared = true;
-            pending->preparedElapsedMs = ready.elapsedMs;
-            pending->preparedRasterMs = ready.rasterMs;
         }
     }
     if (gBuffer == nullptr) {
-        phaseStarted = Clock::now();
         gBuffer = sp<GraphicBuffer>::make(width, height, PIXEL_FORMAT_RGBA_8888, 1,
                 GRALLOC_USAGE_SW_WRITE_OFTEN | GRALLOC_USAGE_HW_COMPOSER | GRALLOC_USAGE_HW_TEXTURE,
                 "NTFingerprintDimLayer");
@@ -375,17 +328,12 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
             gBuffer.clear();
             return failed("buffer_lock_failed");
         }
-        recordPhase(&PresentState::bufferPrepareMs, phaseStarted);
-        phaseStarted = Clock::now();
         tetris::udfps::fillIllumination(static_cast<uint8_t*>(address), width, height,
                                       gBuffer->getStride(), cx, cy, rx, ry, opacity);
-        recordPhase(&PresentState::rasterMs, phaseStarted);
-        phaseStarted = Clock::now();
         if (gBuffer->unlock() != NO_ERROR) {
             gBuffer.clear();
             return failed("buffer_unlock_failed");
         }
-        recordPhase(&PresentState::bufferUnlockMs, phaseStarted);
     }
     if (!current()) {
         hide();
@@ -396,7 +344,6 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         std::lock_guard lock(pending->mutex);
         pending->bufferCacheEntries = gBufferCache.size();
     }
-    phaseStarted = Clock::now();
     gSurface = gClient->createSurface(String8("NTFingerprintDimLayer Tetris"), width, height,
             PIXEL_FORMAT_RGBA_8888,
             gui::ISurfaceComposerClient::eFXSurfaceBufferState
@@ -409,8 +356,9 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         cancelPreparation(true);
         return failed("surface_creation_failed");
     }
-    recordPhase(&PresentState::surfaceCreateMs, phaseStarted);
     const auto target = gSurface;
+    // Readiness requires this buffer to latch and its completed transaction's
+    // present fence to signal. A transaction commit alone does not prove either.
     auto callback = [pending, target](void*, nsecs_t, const sp<Fence>& fence,
                                      const std::vector<SurfaceControlStats>& stats) {
         std::lock_guard lock(pending->mutex);
@@ -421,15 +369,8 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
             }
         }
         pending->fence = fence;
-        pending->completedMs = elapsedMs(pending->started);
         pending->completed = true;
         pending->condition.notify_all();
-    };
-    // Commit is measured only; sensor readiness waits for the completed callback and present fence.
-    auto committed = [pending](void*, nsecs_t, const sp<Fence>&,
-                               const std::vector<SurfaceControlStats>&) {
-        std::lock_guard lock(pending->mutex);
-        pending->committedMs = elapsedMs(pending->started);
     };
     const auto deadline = Clock::now() + std::chrono::milliseconds(500);
     if (!current()) {
@@ -438,7 +379,6 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
     }
     {
         std::lock_guard lock(pending->mutex);
-        pending->submittedMs = elapsedMs(pending->started);
         pending->result = "waiting_complete_callback";
     }
     status_t status = SurfaceComposerClient::Transaction()
@@ -448,7 +388,6 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
             .setDataspace(gSurface, ui::Dataspace::V0_SRGB)
             .setBuffer(gSurface, gBuffer)
             .show(gSurface)
-            .addTransactionCommittedCallback(std::move(committed), nullptr)
             .addTransactionCompletedCallback(std::move(callback), nullptr)
             .apply();
     if (status != NO_ERROR) {
@@ -469,8 +408,7 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
     if (!current() || !pending->completed || !pending->latched
             || pending->fence == nullptr || !pending->fence->isValid()) {
         const std::string reason = !current() ? "cancelled_waiting_callback"
-                : !pending->completed ? (pending->committedMs < 0
-                        ? "callback_timeout_without_commit" : "complete_callback_timeout")
+                : !pending->completed ? "complete_callback_timeout"
                 : !pending->latched ? "surface_not_latched"
                 : "invalid_present_fence";
         lock.unlock();
@@ -490,10 +428,8 @@ bool show(int width, int height, int layerStack, float cx, float cy, float rx, f
         if (waitStatus == NO_ERROR && current()) {
             {
                 std::lock_guard completeLock(pending->mutex);
-                pending->fenceMs = elapsedMs(pending->started);
                 pending->result = "presented";
             }
-            ALOGI("Presentation: %s", diagnostics().c_str());
             return true;
         }
         if (waitStatus != -ETIME && waitStatus != TIMED_OUT) break;

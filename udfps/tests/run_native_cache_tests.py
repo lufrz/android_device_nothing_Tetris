@@ -115,7 +115,7 @@ report = {
     'negative_controls': negatives,
     'checks': [
         'Miss allocates, locks, verifies marker, rasterizes actual pixels and unlocks exactly once',
-        'Hit preserves same buffer/pixels but creates a fresh surface, buffer transaction, commit callback, latch and present-fence wait',
+        'Hit preserves same buffer/pixels but creates a fresh surface, buffer transaction, completed callback, latch and present-fence wait',
         'Two-entry reuse/eviction leaves buffers still retained by a simulated compositor immutable',
         'Allocation, missing marker, mapper, lock, null address and unlock failures never publish bad preparation',
         'Hits reject wrong/unlatched surfaces, invalid/missing fences and fence wait errors',
