@@ -4,10 +4,6 @@ ro.audio.monitorRotation=true
 # Camera
 ro.camerax.extensions.enabled=true
 
-# Display
-persist.sys.hbmservice_file=/sys/panel_feature/hbm_mode
-persist.sys.hbmservice_support=true
-
 # Bluetooth
 bluetooth.profile.a2dp.source.enabled=true
 bluetooth.profile.asha.central.enabled=true

@@ -202,13 +202,6 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.keystore.app_attest_key.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.keystore.app_attest_key.xml \
     frameworks/native/data/etc/android.software.device_id_attestation.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.software.device_id_attestation.xml
 
-# LiveDisplay
-PRODUCT_PACKAGES += \
-    vendor.lineage.livedisplay-service.sysfs
-
-$(call soong_config_set_bool,livedisplay_sysfs,enable_se,true)
-$(call soong_config_set,livedisplay_sysfs,se_path,/sys/panel_feature/hbm_mode)
-
 # Logtag
 PRODUCT_SYSTEM_PROPERTIES += \
     persist.log.tag.surfaceflinger=S
