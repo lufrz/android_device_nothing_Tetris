@@ -9,46 +9,25 @@
 #include <cstring>
 
 namespace tetris::udfps {
-// A 16x16 Bayer cell resolves the 1/256 calibration steps without a framework shader.
-// Black RGB remains zero at every alpha, so the buffer is correctly premultiplied.
-inline int bayer16(int x, int y) {
-    static constexpr int matrix[2][2] = {{0, 2}, {3, 1}};
-    int value = 0;
-    for (int bit = 0; bit < 4; ++bit) {
-        value = value * 4 + matrix[(y >> bit) & 1][(x >> bit) & 1];
-    }
-    return value;
-}
-
 // The caller validates dimensions, geometry and opacity; stride is measured in pixels.
 template <typename Current>
 inline bool fillIlluminationCancellable(uint8_t* pixels, int width, int height, uint32_t stride,
                                        float cx, float cy, float rx, float ry, float opacity,
                                        const Current& current) {
     if (!current()) return false;
-    const float alphaByte = opacity * 255.0f;
-    const int lowerAlpha = static_cast<int>(std::floor(alphaByte));
-    const int highSamples = static_cast<int>(std::lround((alphaByte - lowerAlpha) * 256.0f));
-    uint8_t alphaCell[16][16];
-    for (int y = 0; y < 16; ++y) {
-        for (int x = 0; x < 16; ++x) {
-            alphaCell[y][x] = std::min(255, lowerAlpha + (bayer16(x, y) < highSamples));
-        }
+    // MTK's composer truncates plane alpha to an 8-bit value. Match that
+    // conversion: dithering its fractional part makes compensation darker.
+    // Black RGB stays zero, so the buffer remains correctly premultiplied.
+    const uint8_t maskAlpha = static_cast<uint8_t>(opacity * 255.0f);
+    for (int x = 0; x < width; ++x) {
+        pixels[x * 4] = pixels[x * 4 + 1] = pixels[x * 4 + 2] = 0;
+        pixels[x * 4 + 3] = maskAlpha;
     }
-    // The background repeats every 16 pixels in both directions. Fill its first
-    // 16 rows, then copy them without touching any padding at the end of a row.
-    uint8_t background[16][16 * 4]{};
-    for (int y = 0; y < std::min(height, 16); ++y) {
-        for (int x = 0; x < 16; ++x) background[y][x * 4 + 3] = alphaCell[y][x];
-        auto* row = pixels + static_cast<size_t>(y) * stride * 4;
-        for (int x = 0; x < width; x += 16) {
-            std::memcpy(row + x * 4, background[y], std::min(width - x, 16) * 4);
-        }
-    }
-    for (int y = 16; y < height; ++y) {
+    // Copy only active pixels, preserving padding at the end of each row.
+    for (int y = 1; y < height; ++y) {
         if ((y & 31) == 0 && !current()) return false;
         std::memcpy(pixels + static_cast<size_t>(y) * stride * 4,
-                    pixels + static_cast<size_t>(y & 15) * stride * 4, width * 4);
+                    pixels, width * 4);
     }
 
     // Keep the existing coverage and rounding at the sensor edge. Only this
@@ -62,7 +41,6 @@ inline bool fillIlluminationCancellable(uint8_t* pixels, int width, int height, 
         if (((y - top) & 31) == 0 && !current()) return false;
         auto* row = pixels + static_cast<size_t>(y) * stride * 4;
         for (int x = left; x < right; ++x) {
-            const int maskAlpha = alphaCell[y & 15][x & 15];
             float coverage = 0;
             if (std::abs(x + 0.5f - cx) <= rx + 1 && std::abs(y + 0.5f - cy) <= ry + 1) {
                 const float dx = (x + 0.5f - cx) / rx;
