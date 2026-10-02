@@ -223,18 +223,10 @@ void IlluminationController::updateContact(ContactSource source, bool down) {
             mState->vendorContactObserved = true;
             mState->vendorContact = down;
             if (!down) {
-                if (mState->aodContact && !mState->uiContact) {
-                    ALOGI("Goodix lift ends synthetic AOD contact");
-                }
                 mState->aodContact = false;
             }
         } else if (source == ContactSource::Aod) {
             mState->aodContact = down;
-            if (down && mState->suppressVendorUntilUp) {
-                ALOGI("AOD hint after cancellation: awaiting Goodix lift");
-            } else if (down && mState->vendorContactObserved && !mState->vendorContact) {
-                ALOGI("AOD hint after Goodix lift: awaiting fresh physical contact");
-            }
         } else {
             mState->uiContact = down;
             // SystemUI also uses this release for AOD timeout and overlay hide.
