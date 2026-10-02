@@ -34,12 +34,12 @@ app, count = re.subn(
     r'    private static native boolean nativeShow\(.*?long generation\);',
     '    private static boolean nativeShow(int width, int height, int layerStack, float x,\n'
     '            float y, float radiusX, float radiusY, float alpha, long generation) {\n'
-    '        if(generation!=TestHooks.generation)return false; TestHooks.shows++; TestHooks.onShow(width,height,x,y,radiusX,radiusY,alpha); TestHooks.events.add("show:"+TestHooks.contextMode); TestHooks.shownModes.add(TestHooks.contextMode); TestHooks.hbm=true; TestHooks.afterShow.run(); return true;\n    }', app, flags=re.S)
+    '        if(generation!=TestHooks.generation)return false; TestHooks.shows++; TestHooks.surfaceVisible=true; TestHooks.onShow(width,height,x,y,radiusX,radiusY,alpha); TestHooks.events.add("show:"+TestHooks.contextMode); TestHooks.shownModes.add(TestHooks.contextMode); TestHooks.hbm=true; TestHooks.afterShow.run(); return true;\n    }', app, flags=re.S)
 assert count == 1, "Update the JNI test hook for the changed app"
 app = app.replace('private static native void nativeSetGeneration(long generation);',
                   'private static void nativeSetGeneration(long generation) { TestHooks.generation=generation; TestHooks.cancelPreparation(); }')
 app = app.replace('private static native boolean nativeHide();',
-                  'private static boolean nativeHide() { TestHooks.hides++; TestHooks.events.add("hide"); TestHooks.hbm=false; TestHooks.afterHide.run(); return TestHooks.hideSucceeded; }')
+                  'private static boolean nativeHide() { TestHooks.hides++; TestHooks.events.add("hide"); if(TestHooks.hideSucceeded)TestHooks.surfaceVisible=false; TestHooks.hbm=false; TestHooks.afterHide.run(); return TestHooks.hideSucceeded; }')
 app = app.replace('private static native String nativeGetDiagnostics();',
                   'private static String nativeGetDiagnostics() { return "host fixture"; }')
 app = app.replace('private static native long nativeCancelPreparation();',
@@ -206,10 +206,10 @@ stubs = {
  static final class integer { static final int config_udfpsMtkGhbmAlphaMapScale=1,
  config_udfpsMtkGhbmNormalMaxBacklight=2,config_udfpsMtkGhbmMaxBacklight=3,config_udfpsMtkGhbmMinBacklight=4; }}''',
 "org/lineageos/tetris/udfps/TestHooks.java": '''package org.lineageos.tetris.udfps;
- final class TestHooks { static int shows,hides;static boolean hbm,ui,hideSucceeded;
+ final class TestHooks { static int shows,hides;static boolean hbm,ui,hideSucceeded,surfaceVisible;
  static Runnable afterShow,afterContext,afterPrepare,afterHide;static int timingReads;static String timingMode;
  static String contextMode="none",contextFault="none";static long contextToken,generation;static int contextBegins,contextEnds;
- static boolean failReset,failUiOn;static final java.util.List<String> events=new java.util.ArrayList<>();
+ static boolean failReset,failUiOn,failUiOff;static final java.util.List<String> events=new java.util.ArrayList<>();
  static final java.util.List<String> shownModes=new java.util.ArrayList<>();
  record BufferKey(int width,int height,float x,float y,float rx,float ry,float alpha) {}
  static final java.util.List<BufferKey> cache=new java.util.ArrayList<>();
@@ -248,9 +248,9 @@ stubs = {
    if(contextToken==token){contextToken=0;contextMode="none";}
   }else throw new AssertionError("unexpected operation");
  }
- static void reset() { shows=hides=timingReads=0;hbm=ui=false;hideSucceeded=true;
+ static void reset() { shows=hides=timingReads=0;hbm=ui=surfaceVisible=false;hideSucceeded=true;
   afterShow=afterContext=afterPrepare=afterHide=()->{};prepareCalls=prepareHits=0;prepareEpoch=0;prepareFault="none";readyKey=null;cache.clear();prepareKeys.clear();prepareStarts.clear();timingMode="missing";contextMode="none";contextFault="none";
-  contextToken=0;contextBegins=contextEnds=0;failReset=failUiOn=false;events.clear();shownModes.clear(); }
+  contextToken=0;contextBegins=contextEnds=0;failReset=failUiOn=failUiOff=false;events.clear();shownModes.clear(); }
  static String readHbmTiming() throws java.io.IOException { timingReads++;
   if(timingMode.equals("missing"))throw new java.nio.file.NoSuchFileException("hbm_timing");
   if(timingMode.equals("denied"))throw new java.nio.file.AccessDeniedException("hbm_timing");
@@ -259,7 +259,7 @@ stubs = {
  static void write(String path,boolean on) throws java.io.IOException {
   if(path.endsWith("/hbm")){events.add(on?"hbm1":"hbm0");if(on)throw new AssertionError("context must never force HBM on");
    if(failReset)throw new java.io.IOException("reset failed");hbm=false;contextToken=0;contextMode="none";
-  }else{events.add(on?"ui1":"ui0");if(on&&failUiOn)throw new java.io.IOException("UI-ready failed");ui=on;} }
+  }else{events.add(on?"ui1":"ui0");if((on&&failUiOn)||(!on&&failUiOff))throw new java.io.IOException("UI-ready failed");ui=on;} }
  static String readHbm() { return hbm?"1":"0"; }}''',
 }
 
@@ -850,7 +850,76 @@ public final class DisplayLifecycleTest {
     "an already-decided broadcast may finish after release but cannot block or revive capture");
   System.out.println("PASS: executor/broadcast/dependency failures remain optional, never retry-spin, and broadcast IPC permits cancellation");
  }
+ static Runnable cleanupRetryTask(){try{var field=IlluminationApplication.class.getDeclaredField("mRetryCleanup");
+  field.setAccessible(true);return (Runnable)field.get(app);}catch(ReflectiveOperationException e){throw new AssertionError(e);}}
+ static void cleanupRetries(){
+  for(String cause:new String[]{"end","death","timeout","display"}){
+   Client c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
+   check(TestHooks.surfaceVisible&&TestHooks.ui,"capture must be visible before injected cleanup failure");
+   TestHooks.hideSucceeded=false;
+   if(cause.equals("end"))service.end(c);
+   else if(cause.equals("death"))c.die();
+   else if(cause.equals("timeout"))Handler.advance(10000);
+   else displays.change(Display.STATE_DOZE);
+   Handler.runDue();int hides=TestHooks.hides,failures=c.failures;
+   check(TestHooks.surfaceVisible&&dump().contains("owner=false")&&dump().contains("hardware reset failed"),
+     "failed hide submission retains surface with detached owner: "+cause);
+   check(failures==((cause.equals("timeout")||cause.equals("display"))?1:0),"failure callback count: "+cause);
+   TestHooks.hideSucceeded=true;TestHooks.afterHide=()->check(!Thread.holdsLock(ownerLock()),"cleanup retry must not hold owner lock during JNI");Handler.advance(99);
+   check(TestHooks.hides==hides&&TestHooks.surfaceVisible,"retry must yield to the worker: "+cause);
+   int events=TestHooks.events.size();Handler.advance(1);
+   check(TestHooks.hides==hides+1&&!TestHooks.surfaceVisible&&!TestHooks.hbm&&!TestHooks.ui
+     &&dump().contains("state=idle")&&!power.lock.isHeld(),"retry recovers without another scan: "+cause);
+   check(TestHooks.events.subList(events,TestHooks.events.size()).equals(java.util.List.of("ui0","hide","hbm0")),
+     "retry must reuse capture-off, removal, HBM-off order: "+cause);
+   Handler.advance(12000);check(c.failures==failures&&TestHooks.hides==hides+1,"no retry or duplicate callback after recovery: "+cause);
+  }
+  for(String fault:new String[]{"hbm","ui"}){
+   Client c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
+   int ends=TestHooks.contextEnds;
+   TestHooks.failReset=fault.equals("hbm");TestHooks.failUiOff=fault.equals("ui");
+   service.end(c);Handler.runDue();int hides=TestHooks.hides;
+   check(dump().contains("hardware reset failed"),"failed sysfs cleanup must remain pending: "+fault);
+   TestHooks.failReset=TestHooks.failUiOff=false;Handler.advance(100);
+   check(TestHooks.hides==hides+1&&!TestHooks.ui&&!TestHooks.hbm&&!TestHooks.surfaceVisible
+     &&TestHooks.contextToken==0&&TestHooks.contextEnds==ends+1&&dump().contains("state=idle"),
+     "full retry finishes failed node writes and scan context: "+fault);
+  }
+  Client c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
+  TestHooks.hideSucceeded=false;service.end(c);Handler.runDue();int hides=TestHooks.hides;
+  for(int i=0;i<3;i++)Handler.advance(100);
+  check(TestHooks.hides==hides+3&&TestHooks.surfaceVisible&&dump().contains("hardware reset failed"),
+    "persistent failure is limited to three delayed retries");
+  Handler.advance(12000);
+  check(TestHooks.hides==hides+3&&Handler.backgroundPending()==0,"retry limit prevents spin and preparation over a stuck surface");
+  TestHooks.hideSucceeded=true;Client recovered=new Client();begin(recovered);Handler.runDue();Handler.advance(17);service.end(recovered);Handler.runDue();
+  check(!TestHooks.surfaceVisible&&dump().contains("state=idle"),"exhausted retries do not prevent a later scan from recovering");
+  c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);TestHooks.hideSucceeded=false;
+  service.end(c);Handler.runDue();Runnable stale=cleanupRetryTask();Handler.advance(50);TestHooks.hideSucceeded=true;
+  Client newer=new Client();hides=TestHooks.hides;begin(newer);stale.run();
+  check(TestHooks.hides==hides&&dump().contains("owner=true"),"retry must skip a newly accepted owner before its worker starts");
+  Handler.runDue();Handler.advance(17);hides=TestHooks.hides;
+  stale.run();Handler.advance(100);
+  check(TestHooks.hides==hides&&TestHooks.surfaceVisible&&TestHooks.hbm&&TestHooks.ui&&newer.failures==0,
+    "stale generation retry cannot hide a newer active scan");
+  service.end(newer);Handler.runDue();hides=TestHooks.hides;stale.run();
+  check(TestHooks.hides==hides,"stale retry also skips a newer released generation");
+  c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);TestHooks.hideSucceeded=false;service.end(c);Handler.runDue();
+  TestHooks.hideSucceeded=true;Client acceptedDuringRetry=new Client();
+  TestHooks.afterHide=()->{TestHooks.afterHide=()->{};
+   check(!Thread.holdsLock(ownerLock()),"new begin may be accepted during retry JNI");begin(acceptedDuringRetry);};
+  Handler.advance(100);Handler.advance(17);hides=TestHooks.hides;Handler.advance(300);
+  check(acceptedDuringRetry.failures==0&&TestHooks.surfaceVisible&&TestHooks.hbm&&TestHooks.ui
+    &&TestHooks.hides==hides&&dump().contains("owner=true"),
+    "begin accepted after retry guard renders only after cleanup and stays ready without another retry");
+  service.end(acceptedDuringRetry);Handler.runDue();
+  c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);hides=TestHooks.hides;service.end(c);Handler.runDue();
+  check(TestHooks.hides==hides+1&&!TestHooks.surfaceVisible,"successful cleanup stays immediate and executes once");
+  Handler.advance(12000);check(TestHooks.hides==hides+1,"successful cleanup never schedules retries");
+  System.out.println("PASS: transient hide/node failure recovery after end/death/timeout/display abort, three-retry bound, generation guard and unchanged successful cleanup");
+ }
  public static void main(String[] args){
+  cleanupRetries();
   visiblePulseReadinessAndOnce();visiblePulseOriginGates();
   visiblePulseCancellationAndFailureGates();visiblePulseOptionalFailures();
   preparationEligibility();preparationCoalescingAndReuse();

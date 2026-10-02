@@ -46,12 +46,19 @@ public final class IlluminationApplication extends Application {
     private static final long DISPLAY_READY_TIMEOUT_MS = 2_000;
     private static final long WAKE_LOCK_TIMEOUT_MS = MAX_SCAN_MS + DISPLAY_READY_TIMEOUT_MS;
 
+    private static final long CLEANUP_RETRY_MS = 100;
+    private static final int MAX_CLEANUP_RETRIES = 3;
+
     private static final long PREPARATION_QUIET_MS = 200;
     private static final long PREPARATION_INTERVAL_MS = 1_000;
 
     private final Object mLock = new Object();
     private Handler mWorker;
     private Handler mPreparationWorker;
+    // Worker-only retries recover a failed removal after its owner has gone away.
+    private long mCleanupGeneration = -1;
+    private int mCleanupRetries;
+    private final Runnable mRetryCleanup = this::retryCleanup;
     // Scheduling fields are confined to mWorker. The producer only receives a
     // frozen key/token and publishes immutable pixels through JNI.
     private int mSensorX, mSensorY, mSensorRadius;
@@ -665,7 +672,36 @@ public final class IlluminationApplication extends Application {
         // Ownership is released before cleanup is queued. Only now may idle
         // preparation resume, after the surface and HBM have been cleared.
         updatePreparation();
+        scheduleCleanupRetry(cleared);
         return cleared;
+    }
+
+    private void scheduleCleanupRetry(boolean cleared) {
+        mWorker.removeCallbacks(mRetryCleanup);
+        if (cleared) {
+            mCleanupRetries = 0;
+            return;
+        }
+        synchronized (mLock) {
+            // An active request handles its own failure. Only orphaned cleanup retries.
+            if (mOwner != null) return;
+            if (mCleanupGeneration != mGeneration) {
+                mCleanupGeneration = mGeneration;
+                mCleanupRetries = 0;
+            }
+            if (mCleanupRetries >= MAX_CLEANUP_RETRIES) return;
+            mCleanupRetries++;
+        }
+        mWorker.postDelayed(mRetryCleanup, CLEANUP_RETRY_MS);
+    }
+
+    private void retryCleanup() {
+        synchronized (mLock) {
+            if (mOwner != null || mGeneration != mCleanupGeneration) return;
+        }
+        // Rendering and cleanup share this worker; a new begin can only render
+        // after this call returns. Reuse the complete hardware reset sequence.
+        clearHardware();
     }
 
     private static final class PreparationKey {
