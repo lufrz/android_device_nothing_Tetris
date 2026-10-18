@@ -44,6 +44,10 @@ struct IlluminationState {
     bool uiContact = false;
     bool aodContact = false;
     bool vendorContact = false;
+    // Remember which physical sources started a contact in this attempt. A
+    // release/down from one source is a new capture even if the other lags.
+    bool uiContactStarted = false;
+    bool vendorContactStarted = false;
     // Unlike an actual touch, SystemUI's AOD hint can arrive after the finger
     // lifted. Remember that Goodix supplies physical contacts across operations.
     bool vendorContactObserved = false;
@@ -219,6 +223,10 @@ void IlluminationController::updateContact(ContactSource source, bool down) {
             if (down) return;
             mState->suppressVendorUntilUp = false;
         }
+        const bool newUiContact = source == ContactSource::Ui && down && !mState->uiContact;
+        const bool newVendorContact = vendor && down && !mState->vendorContact;
+        const bool newCapture = (newUiContact && mState->uiContactStarted) ||
+                (newVendorContact && mState->vendorContactStarted);
         if (vendor) {
             mState->vendorContactObserved = true;
             mState->vendorContact = down;
@@ -243,9 +251,17 @@ void IlluminationController::updateContact(ContactSource source, bool down) {
         const bool wanted = mState->active && touching && !mState->retryAfterLift;
         // Real UI and vendor contacts may overlap or arrive late. A vendor lift
         // must not end a newer physical UI touch.
-        if (mState->wanted != wanted) {
+        if (mState->wanted != wanted || (wanted && newCapture)) {
             ++mState->generation;
             mState->wanted = wanted;
+            // The opposite source may still describe the previous contact.
+            // Its first fresh down joins this attempt instead of restarting it.
+            mState->uiContactStarted = false;
+            mState->vendorContactStarted = false;
+        }
+        if (wanted) {
+            mState->uiContactStarted |= newUiContact;
+            mState->vendorContactStarted |= newVendorContact;
         }
     }
     reconcile();

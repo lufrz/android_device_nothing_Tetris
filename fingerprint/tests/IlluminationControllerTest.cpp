@@ -201,22 +201,61 @@ int main() {
         f.vendorUp();
         assert(f.service->ends == 1);
     }
-    {  // Rapid taps from the diagnostic: old Goodix up follows a newer UI down.
+    for (bool vendorFirst : {false, true}) {
+        // A second contact must get a fresh ready edge even if the other source
+        // has not delivered the preceding release yet.
         Fixture f;
         f.vendorDown();
         f.down();
         auto original = f.token();
-        f.up();
+        if (vendorFirst) {
+            f.vendorUp();
+            f.vendorDown();
+        } else {
+            f.up();
+            f.down();
+        }
+        assert(f.service->begins == 2 && f.service->ends == 1);
+        auto current = f.token();
+        assert(current != original);
+        // Delayed release/down from the other source belongs to this new
+        // contact. It must neither terminate nor restart the new illumination.
+        if (vendorFirst) {
+            f.up();
+            f.down();
+        } else {
+            f.vendorUp();
+            f.vendorDown();
+        }
         f.down();
-        // Acquisition quality / a negative auth result do not call a lift API.
+        f.vendorDown();
+        assert(f.service->begins == 2 && f.service->ends == 1);
+        assert(f.token() == current);
+        host::writes.clear();
+        original->onFailure();
+        assert(host::writes.empty() && f.callback->acquisitions == 0);
+        f.up();
+        assert(f.service->ends == 1);
+        f.vendorUp();
+        assert(f.service->ends == 2);
+    }
+    {  // Repeated UI contacts cannot all merge into a delayed vendor contact.
+        Fixture f;
+        f.vendorDown();
+        f.down();
+        for (int attempt = 2; attempt <= 4; ++attempt) {
+            f.up();
+            f.down();
+            assert(f.service->begins == attempt && f.service->ends == attempt - 1);
+            f.vendorDown();  // A duplicate is not evidence of a new vendor contact.
+            assert(f.service->begins == attempt);
+        }
         f.vendorUp();
         f.vendorDown();
-        assert(f.service->begins == 1 && f.service->ends == 0);
-        assert(f.token() == original);
+        assert(f.service->begins == 4 && f.service->ends == 3);
         f.up();
-        assert(f.service->ends == 0);
         f.vendorUp();
-        assert(f.service->ends == 1);
+        assert(f.service->ends == 4);
     }
     {  // A graphics failure stays latched until both sources have reported lift.
         Fixture f;
