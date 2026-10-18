@@ -76,18 +76,11 @@ stubs = {
  return switch(id) { case 1 -> 256; case 2 -> 2680; case 3 -> 4095; default -> 4; }; }}''',
 "android/app/Application.java": '''package android.app;
  public class Application { public static final java.util.Map<Class<?>,Object> services = new java.util.HashMap<>();
- public record Broadcast(android.content.Intent intent,android.os.UserHandle user) {}
- public static final java.util.List<Broadcast> broadcasts=new java.util.ArrayList<>();
- public static RuntimeException broadcastFailure,executorFailure;
- public static final java.util.ArrayDeque<Runnable> mainQueue=new java.util.ArrayDeque<>();
- public java.util.concurrent.Executor getMainExecutor(){return task->{if(executorFailure!=null)throw executorFailure;mainQueue.add(task);};}
- public static boolean runOneMain(){Runnable task=mainQueue.poll();if(task==null)return false;task.run();return true;}
- public static void runMain(){int guard=100;while(runOneMain())if(--guard==0)throw new AssertionError("main executor loop");}
- public static java.util.function.Consumer<android.content.Intent> beforeBroadcast=ignored->{};
- public static Runnable afterBroadcast=()->{};
- public void sendBroadcastAsUser(android.content.Intent intent,android.os.UserHandle user){
-  broadcasts.add(new Broadcast(intent,user));beforeBroadcast.accept(intent);
-  if(broadcastFailure!=null)throw broadcastFailure;afterBroadcast.run();}
+ public static int broadcasts,mainTasks;
+ public java.util.concurrent.Executor getMainExecutor(){return task->{mainTasks++;
+  throw new AssertionError("fingerprint illumination must not queue a visible AOD pulse");};}
+ public void sendBroadcastAsUser(android.content.Intent intent,android.os.UserHandle user){broadcasts++;
+  throw new AssertionError("fingerprint illumination must not broadcast a visible AOD pulse");}
  public void onCreate() {} public <T> T getSystemService(Class<T> type) { return type.cast(services.get(type)); }
  public android.content.res.Resources getResources() { return new android.content.res.Resources(); }
  public int checkCallingOrSelfPermission(String permission) { return 0; }}''',
@@ -279,12 +272,7 @@ public final class DisplayLifecycleTest {
   Handler.reset();TestHooks.reset();ServiceManager.service=null;service=null;power=new PowerManager();
   power.interactive=state==Display.STATE_ON;
   displays=new DisplayManager();displays.display.state=state;displays.display.committedState=state;
-  Application.services.clear();Application.broadcasts.clear();Application.mainQueue.clear();Application.broadcastFailure=null;Application.executorFailure=null;
-  Application.afterBroadcast=()->{};Application.beforeBroadcast=intent->{
-   check(!Thread.holdsLock(ownerLock()),"broadcast IPC must not hold the capture ownership lock");
-   check(TestHooks.ui&&TestHooks.hbm,"visible pulse must be sent only after HBM and UI-ready succeed");
-   check(dump().contains("state=illuminating"),"capture state must be illuminating before optional broadcast");
-   TestHooks.events.add("aod-pulse");};
+  Application.services.clear();Application.broadcasts=Application.mainTasks=0;
   if(powerAvailable)Application.services.put(PowerManager.class,power);
   Application.services.put(DisplayManager.class,displays);
   app=new IlluminationApplication();app.onCreate();Handler.runDue();service=(IIllumination)ServiceManager.service;
@@ -540,11 +528,10 @@ public final class DisplayLifecycleTest {
      "unknown initial/final power state must skip all context publication and preserve baseline presentation");
    check(dump().contains("skipped=power_state_unavailable"),"unknown power classification must be explicit in diagnostics");
    Handler.advance(16);check(!TestHooks.ui,"unknown classification must retain the panel settle interval");
-   Handler.advance(1);Application.runMain();
+   Handler.advance(1);
    check(c.failures==0&&TestHooks.ui&&TestHooks.hbm&&power.lock.isHeld(),
      "unknown classification must not fail optical readiness or capture");
-   check(Application.broadcasts.size()==(!initiallyInteractive&&failedQuery==2?1:0),
-     "unknown context classification must preserve existing initial-state AOD pulse policy");
+   noForcedAod("unknown power classification must never request visible AOD");
    service.end(c);Handler.runDue();
    check(TestHooks.contextToken==0&&!TestHooks.ui&&!TestHooks.hbm&&!power.lock.isHeld(),
      "capture without context must retain normal cleanup");
@@ -721,134 +708,110 @@ public final class DisplayLifecycleTest {
     "rotation mismatch must use normal rendering rather than a stale prepared shape");
   System.out.println("PASS: optional producer errors do not crash or retry-spin, new-key recovery, fallback brightness and exact transformed geometry");
  }
- static Client ambientReady(){
+ static void noForcedAod(String why){
+  check(Application.broadcasts==0&&Application.mainTasks==0&&power.wakes==0,why);
+ }
+ static void fingerprintOnlyReadiness(){
   Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();
-  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
-  check(c.failures==0&&TestHooks.hbm&&TestHooks.ui,"ambient fixture must retain successful first-contact readiness");
-  return c;}
- static void noPulse(String why){Application.runMain();check(Application.broadcasts.isEmpty(),why);}
- static void verifyPulseTarget(){
-  check(Application.broadcasts.size()==1,"one active ambient request must emit exactly one broadcast");
-  Application.Broadcast sent=Application.broadcasts.get(0);
-  check("com.android.systemui.doze.pulse".equals(sent.intent().getAction()),"pulse must use the existing SystemUI action");
-  check("com.android.systemui".equals(sent.intent().getPackage()),"pulse must target only SystemUI");
-  check(sent.user()==UserHandle.SYSTEM&&sent.user().getIdentifier()==0,"pulse must target the system-user receiver");
-  check(sent.intent().getFlags()==(android.content.Intent.FLAG_RECEIVER_REGISTERED_ONLY
-    |android.content.Intent.FLAG_RECEIVER_FOREGROUND),"pulse must reach an already registered receiver on the foreground broadcast queue");
-  check(power.wakes==0,"optional pulse must not replace Doze with full wake");}
- static void visiblePulseReadinessAndOnce(){
-  Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();
-  check(Application.mainQueue.isEmpty()&&Application.broadcasts.isEmpty(),"OFF must not request visible pulse before display and illumination readiness");
+  noForcedAod("OFF contact must wait for SystemUI without requesting visible AOD or full wake");
+  check(TestHooks.shows==0&&power.lock.isHeld(),"OFF contact must keep CPU awake without illuminating yet");
   displays.request(Display.STATE_ON);Handler.runDue();Handler.advance(50);
-  check(TestHooks.shows==0&&Application.mainQueue.isEmpty(),"requested ON alone cannot queue visible pulse while committed state is OFF");
+  check(TestHooks.shows==0&&!TestHooks.ui,"requested ON alone must not illuminate before committed ON");
+  noForcedAod("requested ON must not promote the native fingerprint pulse to visible AOD");
   displays.commit(Display.STATE_ON);Handler.runDue();
-  check(TestHooks.shows==1&&!TestHooks.ui&&Application.mainQueue.isEmpty(),"presentation must not request pulse before sensor readiness");
-  Handler.advance(16);check(Application.mainQueue.isEmpty(),"existing panel-settle wait still precedes optional pulse");
-  Handler.advance(1);check(TestHooks.ui&&Application.mainQueue.size()==1&&Application.broadcasts.isEmpty(),
-    "UI-ready must complete before a nonblocking main-executor dispatch is queued");
-  Object request=ownerRequest();readyAgain(request);displays.change(Display.STATE_ON);Handler.runDue();
-  check(Application.mainQueue.size()==1,"repeated readiness and display events must not duplicate the queued request");
-  power.beforeInteractive=()->check(!Thread.holdsLock(ownerLock()),"dispatch power IPC must occur outside ownership lock");
-  Application.runMain();power.beforeInteractive=()->{};verifyPulseTarget();
-  check(TestHooks.events.indexOf("aod-pulse")>TestHooks.events.indexOf("ui1"),"pulse send follows successful UI_READY write");
-  check(TestHooks.ui&&TestHooks.hbm&&c.failures==0&&dump().contains("requested"),"pulse must preserve capture and report a request, not claim visible acknowledgement");
-  readyAgain(request);Application.runMain();check(Application.broadcasts.size()==1,"completed dispatch is not renewed in the same request");
+  check(TestHooks.shows==1&&TestHooks.hbm&&!TestHooks.ui,"committed ON may present but must wait for panel settling");
+  Handler.advance(16);check(!TestHooks.ui,"sensor readiness must retain the existing panel settle interval");
+  Handler.advance(1);
+  check(c.failures==0&&TestHooks.ui&&TestHooks.hbm&&power.lock.isHeld(),
+    "screen-off capture must become ready on the first held contact");
+  noForcedAod("successful screen-off readiness must illuminate without a visible AOD request");
+  displays.change(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
+  check(TestHooks.shows==1&&TestHooks.ui,"duplicate contact and display events must preserve the current capture");
   service.end(c);Handler.runDue();
-  Client next=new Client();begin(next);Handler.runDue();Handler.advance(17);Application.runMain();
-  check(Application.broadcasts.size()==2&&next.failures==0,"a later real contact may request its own one-shot pulse");
-  System.out.println("PASS: visible pulse queued after committed ON/HBM/UI-ready, no scan-worker IPC, correct action/package/user/flags and one attempt per contact");
+  check(!TestHooks.ui&&!TestHooks.hbm&&!power.lock.isHeld(),"release must remove illumination and CPU hold");
+  Client next=new Client();begin(next);Handler.runDue();Handler.advance(17);
+  check(next.failures==0&&TestHooks.shows==2&&TestHooks.ui,"a later contact must still become ready normally");
+  noForcedAod("neither completion nor subsequent contact may request visible AOD");
+  System.out.println("PASS: fingerprint-only first-contact readiness, committed ON and panel-settle gates, repeat contact and release without visible AOD");
  }
- static void visiblePulseOriginGates(){
+ static void fingerprintOnlyDisplayOrigins(){
+  int[][] origins={
+   {Display.STATE_OFF,Display.STATE_OFF},
+   {Display.STATE_ON,Display.STATE_OFF},
+   {Display.STATE_OFF,Display.STATE_ON},
+   {Display.STATE_ON,Display.STATE_ON},
+   {Display.STATE_DOZE,Display.STATE_DOZE},
+   {Display.STATE_DOZE_SUSPEND,Display.STATE_DOZE_SUSPEND},
+   {Display.STATE_DOZE,Display.STATE_ON},
+   {Display.STATE_ON,Display.STATE_DOZE},
+   {Display.STATE_UNKNOWN,Display.STATE_OFF},
+   {Display.STATE_OFF,Display.STATE_UNKNOWN}
+  };
+  for(int[] origin:origins){
+   Client c=setup(origin[0]);displays.display.committedState=origin[1];power.interactive=false;
+   begin(c);Handler.runDue();
+   check(displays.display.state==origin[0]&&displays.display.committedState==origin[1],
+     "illumination must leave the initial requested/committed AOD state under SystemUI control");
+   boolean readyDisplay=origin[0]==Display.STATE_ON&&origin[1]==Display.STATE_ON;
+   check(TestHooks.shows==(readyDisplay?1:0),"only an already committed ON display may present immediately");
+   noForcedAod("OFF, fixed AOD, transitional and noninteractive ON origins must not request visible AOD");
+   if(!readyDisplay){displays.change(Display.STATE_ON);Handler.runDue();}
+   Handler.advance(17);
+   check(c.failures==0&&TestHooks.ui&&TestHooks.hbm
+     &&TestHooks.shownModes.equals(java.util.List.of("ambient")),
+     "every ambient origin must retain the same-contact capture and ambient kernel context");
+   noForcedAod("ambient readiness must not depend on initial power-state eligibility for visible UI");
+   service.end(c);Handler.runDue();
+   check(displays.display.state==Display.STATE_ON&&displays.display.committedState==Display.STATE_ON,
+     "illumination cleanup must not override SystemUI display policy");
+   displays.display.committedState=origin[1];displays.request(origin[0]);Handler.runDue();
+   check(TestHooks.shows==1&&!TestHooks.ui&&!TestHooks.hbm&&dump().contains("owner=false"),
+     "returning to the original fixed-AOD or screen-off state must not revive the finished scan");
+   noForcedAod("cleanup and restoration of system-selected AOD must remain free of forced UI");
+  }
   Client c=setup(Display.STATE_ON);begin(c);Handler.runDue();Handler.advance(17);
-  noPulse("interactive screen-on authentication must not request ambient UI");
-  c=setup(Display.STATE_OFF);power.interactive=true;begin(c);Handler.runDue();power.interactive=false;
-  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
-  noPulse("interactive origin must not become eligible when interactivity later changes");
-  for(int requested:new int[]{Display.STATE_DOZE,Display.STATE_DOZE_SUSPEND}){
-   c=setup(requested);displays.display.committedState=Display.STATE_OFF;begin(c);Handler.runDue();
-   displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
-   noPulse("existing requested AOD state must be preserved without an extra pulse");
-   check(c.failures==0&&TestHooks.ui,"AOD-origin filtering must not stop biometric capture");
-  }
-  for(int committed:new int[]{Display.STATE_DOZE,Display.STATE_DOZE_SUSPEND}){
-   c=setup(Display.STATE_OFF);displays.display.committedState=committed;begin(c);Handler.runDue();
-   displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
-   noPulse("existing committed AOD state must be preserved without an extra pulse");
-   check(c.failures==0&&TestHooks.ui,"committed AOD-origin filtering must not stop capture");
-  }
-  for(boolean unknownRequested:new boolean[]{false,true}){
-   c=setup(Display.STATE_OFF);
-   if(unknownRequested)displays.display.state=Display.STATE_UNKNOWN;else displays.display.committedState=Display.STATE_UNKNOWN;
-   begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
-   noPulse("unknown initial display state must not authorize optional AOD promotion");
-  }
-  c=setup(Display.STATE_OFF);power.failQueryAt=1;begin(c);Handler.runDue();
-  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
-  noPulse("unknown initial interactivity must retain ambient capture but not authorize optional pulse");
-  check(c.failures==0&&TestHooks.ui,"initial power-query failure must preserve established capture fallback");
-  c=setup(Display.STATE_ON);power.interactive=false;begin(c);Handler.runDue();Handler.advance(17);Application.runMain();
-  verifyPulseTarget();check(c.failures==0&&TestHooks.ui,"an already ON but noninteractive fingerprint pulse may show full UI");
-  System.out.println("PASS: interactive and unknown origins excluded, existing requested/committed AOD untouched, noninteractive ON pulse supported");
+  check(c.failures==0&&TestHooks.ui,"interactive fingerprint capture must remain ready");
+  noForcedAod("interactive capture must not request ambient UI");
+  System.out.println("PASS: OFF/ON/DOZE/DOZE_SUSPEND/unknown requested and committed origins retain fingerprint capture and SystemUI AOD policy");
  }
- static void visiblePulseCancellationAndFailureGates(){
-  Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();service.end(c);displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
-  noPulse("contact cancelled before display readiness must not pulse");
-  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();service.end(c);Handler.runDue();Handler.advance(17);
-  noPulse("contact cancelled before UI-ready must not pulse");
-  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();TestHooks.hbm=false;Handler.advance(17);
-  noPulse("revoked HBM must fail readiness without sending visible pulse");check(c.failures==1,"revoked HBM remains a capture failure");
-  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();TestHooks.failUiOn=true;Handler.advance(17);
-  noPulse("failed UI-ready write must not queue visible pulse");check(c.failures==1&&!TestHooks.ui,"UI-ready write failure must remain visible");
-  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();displays.display.rotation=1;Handler.advance(17);
-  noPulse("changed geometry before readiness must not pulse");
-  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();Handler.advance(2000);
-  noPulse("display timeout must not leave a queued visible pulse");
-  c=ambientReady();check(Application.mainQueue.size()==1,"fixture needs queued pulse");service.end(c);Handler.runDue();
-  noPulse("release while main dispatch is pending must cancel visible pulse");
-  c=ambientReady();c.die();Handler.runDue();noPulse("owner death must cancel queued pulse");
-  c=ambientReady();power.interactive=true;noPulse("unlock before main dispatch must suppress late ambient pulse");
-  check(c.failures==0&&TestHooks.ui,"suppressed UI request must not disturb ongoing capture");
-  c=ambientReady();displays.display.state=Display.STATE_OFF;noPulse("requested power loss before dispatch suppresses pulse");
-  c=ambientReady();displays.display.committedState=Display.STATE_OFF;noPulse("committed power loss before dispatch suppresses pulse");
-  Client old=ambientReady();service.end(old);Client newer=new Client();begin(newer);Handler.runDue();Handler.advance(17);
-  check(Application.mainQueue.size()==2,"replacement fixture retains both callbacks for ownership testing");
-  check(Application.runOneMain()&&Application.broadcasts.isEmpty(),"stale main callback cannot send for a replacement owner");
-  Application.runMain();verifyPulseTarget();check(newer.failures==0&&TestHooks.ui,"new owner remains able to send its own pulse");
-  c=ambientReady();final Client cancelledDuringSample=c;
-  power.beforeInteractive=()->{power.beforeInteractive=()->{};service.end(cancelledDuringSample);Handler.runDue();};
-  noPulse("ownership must be rechecked after power/display IPC before dispatch decision");
-  check(dump().contains("owner=false")&&!TestHooks.hbm&&!TestHooks.ui,"sampling race must allow normal cancellation");
-  c=ambientReady();final Client replacedDuringSample=c;final Client activeAfterSample=new Client();
-  power.beforeInteractive=()->{power.beforeInteractive=()->{};service.end(replacedDuringSample);
-   begin(activeAfterSample);Handler.runDue();Handler.advance(17);};
-  check(Application.runOneMain()&&Application.broadcasts.isEmpty(),
-    "old dispatch must not borrow a replacement owner's illuminated state after sampling IPC");
-  Application.runMain();verifyPulseTarget();
-  check(activeAfterSample.failures==0&&TestHooks.ui,"replacement during sampling keeps its own one-shot pulse");
-  System.out.println("PASS: no pulse after failed readiness, cancellation, death, unlock, power loss, timeout or stale owner; main sampling races recheck ownership");
- }
- static void visiblePulseOptionalFailures(){
-  Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();
-  Application.executorFailure=new java.util.concurrent.RejectedExecutionException("executor unavailable");Handler.advance(17);
-  check(c.failures==0&&TestHooks.ui&&TestHooks.hbm&&Application.mainQueue.isEmpty()&&dump().contains("failed"),
-    "executor rejection must be diagnostic only, after successful readiness");
-  Application.executorFailure=null;readyAgain(ownerRequest());Application.runMain();
-  check(Application.broadcasts.isEmpty(),"failed enqueue may not retry repeatedly in the same contact");
-  for(RuntimeException fault:new RuntimeException[]{new SecurityException("broadcast denied"),new IllegalStateException("receiver unavailable")}){
-   c=ambientReady();Application.broadcastFailure=fault;Application.runMain();
-   check(Application.broadcasts.size()==1&&c.failures==0&&TestHooks.ui&&TestHooks.hbm&&dump().contains("failed"),
-    "broadcast failure must not fail or cancel fingerprint capture");
-   Application.broadcastFailure=null;readyAgain(ownerRequest());Application.runMain();
-   check(Application.broadcasts.size()==1,"failed send must remain one attempt for the contact");
+ static void fingerprintOnlyCancellationAndFailure(){
+  Client c=setup(Display.STATE_OFF);begin(c);Handler.runDue();service.end(c);
+  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(17);
+  check(TestHooks.shows==0&&!TestHooks.ui&&!TestHooks.hbm,"release before the pulse must cancel the held contact");
+  noForcedAod("cancelled display wait must never request AOD");
+  c=setup(Display.STATE_OFF);begin(c);Handler.runDue();displays.change(Display.STATE_ON);Handler.runDue();
+  service.end(c);Handler.runDue();Handler.advance(17);
+  check(!TestHooks.ui&&!TestHooks.hbm&&dump().contains("owner=false"),"release during settling must reject late readiness");
+  noForcedAod("release during settling must not leave delayed UI work");
+  for(String failure:new String[]{"hbm","ui","geometry","timeout","death","display"}){
+   c=setup(Display.STATE_OFF);begin(c);Handler.runDue();
+   if(failure.equals("timeout"))Handler.advance(2000);
+   else{
+    displays.change(Display.STATE_ON);Handler.runDue();
+    if(failure.equals("hbm"))TestHooks.hbm=false;
+    else if(failure.equals("ui"))TestHooks.failUiOn=true;
+    else if(failure.equals("geometry"))displays.display.rotation=1;
+    else if(failure.equals("death"))c.die();
+    else displays.request(Display.STATE_OFF);
+    Handler.advance(17);
+   }
+   check(c.failures==(failure.equals("death")?0:1)&&!TestHooks.ui&&!TestHooks.hbm
+     &&dump().contains("owner=false"),"failed or abandoned capture must clean up: "+failure);
+   noForcedAod("failed capture must never request visible AOD: "+failure);
   }
-  c=ambientReady();power.failQueryAt=power.interactiveQueries+1;noPulse("unavailable current interactivity must fail closed for optional pulse");
-  check(c.failures==0&&TestHooks.ui,"dispatch dependency error must not fail biometric capture");
-  c=ambientReady();final Client releasedInIpc=c;
-  Application.afterBroadcast=()->{service.end(releasedInIpc);Handler.runDue();};
-  Application.runMain();
-  check(Application.broadcasts.size()==1&&c.failures==0&&!TestHooks.ui&&!TestHooks.hbm&&dump().contains("owner=false"),
-    "an already-decided broadcast may finish after release but cannot block or revive capture");
-  System.out.println("PASS: executor/broadcast/dependency failures remain optional, never retry-spin, and broadcast IPC permits cancellation");
+  Client old=setup(Display.STATE_OFF);begin(old);Handler.runDue();
+  displays.change(Display.STATE_ON);Handler.runDue();Object staleRequest=ownerRequest();
+  Client newer=new Client();begin(newer);Handler.runDue();String newerGeneration=ownerGeneration();
+  check(TestHooks.shows==2&&!TestHooks.ui&&TestHooks.hbm,"replacement fixture must be waiting for its own panel settle");
+  readyAgain(staleRequest);service.end(old);old.die();Handler.runDue();
+  check(!TestHooks.ui&&TestHooks.hbm&&ownerGeneration().equals(newerGeneration),
+    "old readiness, release and death must not authorize or cancel replacement capture");
+  Handler.advance(16);check(!TestHooks.ui,"replacement must retain its own complete settle interval");
+  Handler.advance(1);
+  check(newer.failures==0&&TestHooks.ui&&TestHooks.hbm,"replacement must become ready only through its own callback");
+  noForcedAod("stale and current owners must not request visible AOD");
+  service.end(newer);Handler.runDue();
+  System.out.println("PASS: fingerprint-only cancellation, HBM/UI/display failures, timeout, death and stale-ready replacement ownership");
  }
  static Runnable cleanupRetryTask(){try{var field=IlluminationApplication.class.getDeclaredField("mRetryCleanup");
   field.setAccessible(true);return (Runnable)field.get(app);}catch(ReflectiveOperationException e){throw new AssertionError(e);}}
@@ -920,8 +883,8 @@ public final class DisplayLifecycleTest {
  }
  public static void main(String[] args){
   cleanupRetries();
-  visiblePulseReadinessAndOnce();visiblePulseOriginGates();
-  visiblePulseCancellationAndFailureGates();visiblePulseOptionalFailures();
+  fingerprintOnlyReadiness();fingerprintOnlyDisplayOrigins();
+  fingerprintOnlyCancellationAndFailure();
   preparationEligibility();preparationCoalescingAndReuse();
   preparationTouchAndStaleCompletion();preparationDelayedWorkerRateLimit();preparationFailuresAndGeometry();
   scanContextLifecycle();
@@ -951,7 +914,7 @@ public final class DisplayLifecycleTest {
   c=setup(Display.STATE_OFF);begin(c);Handler.runDue();
   String heldGeneration=ownerGeneration();
   check(dump().contains("state=waiting for display")&&dump().contains("display=state1")
-    &&dump().contains("displayWake=systemui-doze"),"waiting diagnostics must identify the SystemUI pulse owner");
+    &&dump().contains("displayWake=systemui-udfps-pulse"),"waiting diagnostics must identify the SystemUI pulse owner");
   Handler.advance(499);
   check(c.failures==0&&c.links==1&&TestHooks.shows==0&&!TestHooks.ui&&power.lock.isHeld()
     &&ownerGeneration().equals(heldGeneration),"held contact must survive asynchronous proximity checking");
