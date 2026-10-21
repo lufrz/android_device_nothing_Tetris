@@ -13,6 +13,9 @@ private class Port : TcpControlPort {
     var ready = true
     var readable = true
     var bootAlgorithm = "off"
+    var liveRequest = "off"
+    var restoreRequest = "off"
+    var clearSucceeds = true
     val writes = mutableListOf<String>()
     val bootSaves = mutableListOf<String>()
     var action: (String) -> Unit = { current = it }
@@ -20,7 +23,22 @@ private class Port : TcpControlPort {
     override fun readCurrent(): String = if (readable) current else throw IOException("missing")
     override fun readAvailable() = available
     override fun controlReady() = ready
+    override fun clearPendingRequests(): Boolean {
+        if (!clearSucceeds) return false
+        liveRequest = "off"; restoreRequest = "off"
+        return true
+    }
+    fun consentChanged(accepted: Boolean) {
+        val replay = if (accepted) liveRequest else restoreRequest
+        if (replay != "off") { writes += replay; action(replay) }
+    }
+    override fun restoreAfterConsent(algorithm: String) {
+        restoreRequest = algorithm
+        writes += algorithm
+        action(algorithm)
+    }
     override fun request(algorithm: String) {
+        liveRequest = algorithm
         writes += algorithm
         action(algorithm)
     }
@@ -44,6 +62,56 @@ fun main() {
         println("PASS: $name")
     }
 
+    test("consent cleanup clears saved TCP and restores owned value while gate is closed") {
+        val port = Port()
+        val manager = TcpControlManager(port, pause = {})
+        check(manager.apply("bbr", manager.readState()).successful)
+        check(manager.setApplyOnBoot(true, manager.readState()).successful)
+        port.ready = false
+        check(manager.disableForConsent())
+        check(port.current == "cubic" && port.bootAlgorithm == "off")
+    }
+    test("consent cleanup preserves another controller's TCP selection") {
+        val port = Port()
+        val manager = TcpControlManager(port, pause = {})
+        check(manager.apply("bbr", manager.readState()).successful)
+        port.current = "westwood"
+        val writes = port.writes.size
+        port.ready = false
+        check(manager.disableForConsent())
+        check(port.current == "westwood" && port.writes.size == writes)
+    }
+    test("restore then acceptance cannot replay the old live command") {
+        val port = Port()
+        val manager = TcpControlManager(port, pause = {})
+        check(manager.apply("bbr", manager.readState()).successful)
+        check(port.liveRequest == "bbr")
+        port.ready = false
+        check(manager.disableForConsent())
+        check(port.current == "cubic" && port.liveRequest == "off" && port.restoreRequest == "off")
+        val writes = port.writes.size
+        port.consentChanged(true)
+        check(port.current == "cubic" && port.writes.size == writes)
+        // Another controller changes TCP before the next terms revocation.
+        port.current = "westwood"
+        port.consentChanged(false)
+        check(port.current == "westwood" && port.writes.size == writes)
+    }
+    test("failed TCP reset cannot leave a command to replay at the next consent edge") {
+        val port = Port()
+        val manager = TcpControlManager(port, pause = {})
+        check(manager.apply("bbr", manager.readState()).successful)
+        port.ready = false
+        port.action = { }
+        check(!manager.disableForConsent())
+        check(port.liveRequest == "off" && port.restoreRequest == "off")
+    }
+    test("unconfirmed command neutralization reports reset failure") {
+        val port = Port().apply { clearSucceeds = false; liveRequest = "bbr" }
+        val manager = TcpControlManager(port, pause = {})
+        check(!manager.disableForConsent())
+        check(port.bootAlgorithm == "off" && port.writes.isEmpty())
+    }
     test("runtime intersection excludes unsupported algorithms and preserves unknown current") {
         val port = Port().apply { current = "custom" }
         val manager = TcpControlManager(port, pause = {})

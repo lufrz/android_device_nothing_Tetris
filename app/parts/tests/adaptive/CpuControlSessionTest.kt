@@ -58,6 +58,13 @@ fun runCpuSessionTests(): Int {
         }
     }
 
+    run("closed consent rejects a queued application CPU operation") { _ ->
+        org.lineageos.settings.tetris.consent.PartsControlGate.allowed = false
+        var called = false
+        val result = CpuControlSession.manual { called = true; CpuResult() }
+        check(!called && result.failure == CpuFailure.UNAVAILABLE)
+    }
+
     run("manual intent invalidates ownership for no-op, failure and exception") { root ->
         var writes = 0
         val coordinator = CpuControlCoordinator(CpuControlManager(root)) { _, _ -> writes++ }

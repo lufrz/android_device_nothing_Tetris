@@ -24,6 +24,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import org.lineageos.settings.tetris.consent.TermsConsent
 import org.lineageos.settings.tetris.PartsActivity
 import org.lineageos.settings.tetris.R
 
@@ -48,6 +49,13 @@ class AdaptiveService : Service() {
                 val command = if (repository.isRunning(owner)) withTimeoutOrNull(5_000) { commands.receive() }
                     else commands.receive()
                 try {
+                    if (!TermsConsent.isAccepted(this@AdaptiveService)) {
+                        repository.disableForConsent()
+                        clearProposalNotification(this@AdaptiveService)
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                        continue
+                    }
                     if (command == null) {
                         repository.tick(owner)
                     } else when (command.action) {
@@ -86,6 +94,11 @@ class AdaptiveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!TermsConsent.isAccepted(this)) {
+            commands.trySend(Command(ACTION_STOP, startId))
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        }
         if (intent?.action == ACTION_START) {
             try {
                 startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)

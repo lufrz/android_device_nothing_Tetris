@@ -19,6 +19,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.STATUS_BAR" />
 
     <application
         android:allowBackup="false"
@@ -55,6 +57,26 @@
             android:name=".PartsSubActivity"
             android:exported="false"
             android:label="@string/parts_title" />
+        <activity
+            android:name=".consent.TermsActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:resizeableActivity="false"
+            android:label="@string/terms_title" />
+        <receiver
+            android:name=".consent.TermsBootReceiver"
+            android:exported="false"
+            android:directBootAware="true">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <service
+            android:name=".consent.TermsSetupJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <service
             android:name=".adaptive.AdaptiveService"
             android:exported="false"

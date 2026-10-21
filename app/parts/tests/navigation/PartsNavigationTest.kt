@@ -7,6 +7,8 @@ import android.os.UserHandle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import org.lineageos.settings.tetris.adaptive.AdaptiveService
+import org.lineageos.settings.tetris.consent.TermsConsent
+import org.lineageos.settings.tetris.consent.TermsActivity
 
 private const val PAGE = "org.lineageos.settings.tetris.PAGE"
 private const val PENDING_REVIEW = "pending_review"
@@ -18,6 +20,7 @@ private fun test(name: String, body: () -> Unit) {
     UserHandle.currentUser = UserHandle.USER_SYSTEM
     Toast.shown = 0
     ScreenProbe.reset()
+    TermsConsent.accepted = true
     try { body() } catch (error: Throwable) { throw AssertionError(name, error) }
     cases++
 }
@@ -50,6 +53,31 @@ private fun assertInternalPage(intent: Intent, page: String, id: String? = null)
 }
 
 fun main() {
+    test("unaccepted owner enters terms without rendering Home") {
+        TermsConsent.accepted = false
+        val activity = home()
+        expect(activity.content == null && activity.finishCount == 1, "Home leaked without consent")
+        expect(activity.onlyLaunch().destination == TermsActivity::class.java, "Missing terms gate")
+    }
+    test("notification cannot bypass terms gate") {
+        TermsConsent.accepted = false
+        val activity = home(request("pending"))
+        expect(activity.content == null && activity.onlyLaunch().destination == TermsActivity::class.java,
+            "Notification entered adaptive without consent")
+    }
+    for (page in pages) test("direct $page entry requires consent") {
+        TermsConsent.accepted = false
+        val activity = child(page)
+        expect(activity.content == null && activity.finishCount == 1, "Subpage leaked without consent")
+        expect(activity.onlyLaunch().destination == TermsActivity::class.java, "Missing subpage gate")
+    }
+    test("resuming an old Activity after consent is revoked rechecks the gate") {
+        val activity = home()
+        TermsConsent.accepted = false
+        activity.performResume()
+        expect(activity.finishCount == 1 && activity.onlyLaunch().destination == TermsActivity::class.java,
+            "Resumed old page bypassed consent")
+    }
     test("ordinary Home opens no child") {
         val activity = home()
         expect(ScreenProbe.page == "home", "Home not rendered")

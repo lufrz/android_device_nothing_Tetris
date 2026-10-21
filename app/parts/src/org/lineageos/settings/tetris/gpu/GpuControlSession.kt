@@ -3,6 +3,8 @@
  */
 package org.lineageos.settings.tetris.gpu
 
+import org.lineageos.settings.tetris.consent.PartsControlGate
+
 import kotlin.math.abs
 
 internal data class GpuSessionSnapshot(
@@ -61,6 +63,7 @@ internal class GpuControlCoordinator(
     private var tokenSequence = 0L
     private var owner: Ownership? = null
     private var trial: Trial? = null
+    private var manualOwner: Ownership? = null
 
     @Synchronized fun snapshot(): GpuSessionSnapshot = snapshot(manager.readControlSnapshot())
 
@@ -71,7 +74,30 @@ internal class GpuControlCoordinator(
         controlRevision++
         owner = null
         trial = null
-        return block(manager)
+        val before = manager.readControlSnapshot()
+        val previous = manualOwner?.takeIf { sameControls(before, it.current, it.baseline.operatingPoints) }
+        val result = block(manager)
+        val after = manager.readControlSnapshot()
+        manualOwner = if (result is GpuResult && result.successful && before.controls != null &&
+                after.controls != null && before.controls != after.controls)
+            Ownership(previous?.baseline ?: before, after.controls)
+        else previous
+        return result
+    }
+
+    @Synchronized fun releasePartsOverrides(): GpuResult {
+        val owned = manualOwner ?: return GpuResult()
+        val before = manager.readControlSnapshot()
+        if (!sameControls(before, owned.current, owned.baseline.operatingPoints)) {
+            manualOwner = null
+            return GpuResult()
+        }
+        val target = owned.baseline.controls ?: return GpuResult(GpuFailure.UNAVAILABLE)
+        val result = manager.restoreOwned(before, target)
+        manualRevision++
+        controlRevision++
+        if (result.successful || result.failure == GpuFailure.CONFLICT) manualOwner = null
+        return result
     }
 
     @Synchronized fun adaptiveMaximum(expected: GpuSessionSnapshot, targetMaximumKHz: Long): AdaptiveGpuWrite {
@@ -198,7 +224,10 @@ internal class GpuControlCoordinator(
 internal object GpuControlSession {
     private val coordinator = GpuControlCoordinator()
     fun snapshot(): GpuSessionSnapshot = coordinator.snapshot()
-    fun <T> manual(block: (GpuControlManager) -> T): T = coordinator.manual(block)
+    fun releasePartsOverrides(): GpuResult = coordinator.releasePartsOverrides()
+    fun manual(block: (GpuControlManager) -> GpuResult): GpuResult = coordinator.manual {
+        if (PartsControlGate.allowed) block(it) else GpuResult(GpuFailure.UNAVAILABLE)
+    }
     fun adaptiveMaximum(expected: GpuSessionSnapshot, targetMaximumKHz: Long): AdaptiveGpuWrite =
         coordinator.adaptiveMaximum(expected, targetMaximumKHz)
     fun adaptiveRestore(token: GpuRestoreToken): AdaptiveGpuWrite = coordinator.adaptiveRestore(token)

@@ -59,6 +59,8 @@ internal class CpuControlManager(
 
     private val initialPolicies = mutableMapOf<Int, Bounds>()
     private val initialCores = mutableMapOf<Int, Boolean>()
+    private val ownedPolicies = mutableMapOf<Int, Bounds>()
+    private val ownedCores = mutableMapOf<Int, Boolean>()
 
     @Synchronized
     fun readState(): CpuState {
@@ -143,6 +145,30 @@ internal class CpuControlManager(
         return applyTransaction(Snapshot(initialPolicies.toMap(), initialCores.toMap()))
     }
 
+
+    /** Restore known app writes, then release Parts-only kernel locks even after process loss. */
+    @Synchronized fun releasePartsOverrides(): CpuResult {
+        val policies = ownedPolicies.filter { (id, value) ->
+            !value.locked && runCatching { readBounds(id) == value }.getOrDefault(false)
+        }.mapNotNull { (id, _) -> initialPolicies[id]?.let { id to it } }.toMap()
+        val cores = ownedCores.filter { (id, value) -> readOnlineCores()[id] == value }
+            .mapNotNull { (id, _) -> initialCores[id]?.let { id to it } }.toMap()
+        var failure: CpuFailure? = null
+        if (policies.isNotEmpty() || cores.isNotEmpty()) {
+            failure = applyTransaction(Snapshot(policies, cores)).failure
+        }
+        POLICY_IDS.forEach { id ->
+            if (readLock(id)?.locked == true) {
+                try {
+                    writer(lockFile(id), "0\n")
+                    if (readLock(id)?.locked != false) failure = CpuFailure.READBACK_FAILED
+                } catch (_: Exception) { failure = CpuFailure.WRITE_FAILED }
+            }
+        }
+        if (failure == null) { ownedPolicies.clear(); ownedCores.clear() }
+        return CpuResult(failure)
+    }
+
     private fun applyTransaction(target: Snapshot): CpuResult {
         val previous = try {
             Snapshot(
@@ -156,6 +182,12 @@ internal class CpuControlManager(
         }
         return try {
             applySnapshot(target)
+            target.policies.forEach { (id, bounds) ->
+                if (bounds == initialPolicies[id]) ownedPolicies.remove(id) else ownedPolicies[id] = bounds
+            }
+            target.cores.forEach { (id, online) ->
+                if (online == initialCores[id]) ownedCores.remove(id) else ownedCores[id] = online
+            }
             CpuResult()
         } catch (error: Exception) {
             val rolledBack = try {

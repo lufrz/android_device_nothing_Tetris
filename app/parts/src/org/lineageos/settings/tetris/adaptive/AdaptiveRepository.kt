@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
+import org.lineageos.settings.tetris.consent.TermsConsent
 import org.lineageos.settings.tetris.cpu.CpuControlSession
 import org.lineageos.settings.tetris.gpu.AdaptiveGpuWrite
 import org.lineageos.settings.tetris.gpu.GpuControlSession
@@ -98,6 +99,7 @@ internal class AdaptiveRepository private constructor(context: Context) {
     @Synchronized fun snapshot(): AdaptiveSnapshot = engine.snapshot(SystemClock.elapsedRealtime())
 
     fun setEnabled(enabled: Boolean) {
+        if (enabled && !TermsConsent.isAccepted(app)) return
         val intent = Intent(app, AdaptiveService::class.java).setAction(
             if (enabled) AdaptiveService.ACTION_START else AdaptiveService.ACTION_STOP)
         if (enabled) ContextCompat.startForegroundService(app, intent) else app.startService(intent)
@@ -109,6 +111,7 @@ internal class AdaptiveRepository private constructor(context: Context) {
     }
 
     fun approveProposal(id: String) {
+        if (!TermsConsent.isAccepted(app)) return
         app.startService(Intent(app, AdaptiveService::class.java)
             .setAction(AdaptiveService.ACTION_APPROVE).putExtra(AdaptiveService.EXTRA_PROPOSAL_ID, id))
     }
@@ -120,13 +123,14 @@ internal class AdaptiveRepository private constructor(context: Context) {
 
     internal fun approveProposal(owner: Any, id: String): AdaptiveDecisionResult {
         synchronized(this) {
-            if (sessionOwner !== owner || !engine.snapshot(SystemClock.elapsedRealtime()).enabled ||
+            if (!TermsConsent.isAccepted(app) || sessionOwner !== owner || !engine.snapshot(SystemClock.elapsedRealtime()).enabled ||
                 engine.snapshot(SystemClock.elapsedRealtime()).pendingProposal?.id != id)
                 return AdaptiveDecisionResult(false, "proposal_not_current")
         }
         val sample = collectSample()
         return synchronized(this) {
-            if (sessionOwner !== owner) return@synchronized AdaptiveDecisionResult(false, "proposal_not_current")
+            if (!TermsConsent.isAccepted(app) || sessionOwner !== owner)
+                return@synchronized AdaptiveDecisionResult(false, "proposal_not_current")
             engine.approveProposal(id, sample, SystemClock.elapsedRealtime()).also { saveHistory() }
         }
     }
@@ -144,6 +148,7 @@ internal class AdaptiveRepository private constructor(context: Context) {
     }
 
     @Synchronized internal fun startSession(owner: Any) {
+        if (!TermsConsent.isAccepted(app)) return
         if (sessionOwner != null && sessionOwner !== owner)
             engine.stop(SystemClock.elapsedRealtime(), System.currentTimeMillis())
         if (sessionOwner !== owner || !engine.snapshot(SystemClock.elapsedRealtime()).enabled) {
@@ -164,14 +169,23 @@ internal class AdaptiveRepository private constructor(context: Context) {
         saveHistory()
     }
 
+    @Synchronized internal fun disableForConsent(): Boolean {
+        engine.stop(SystemClock.elapsedRealtime(), System.currentTimeMillis(), "consent_required")
+        sessionOwner = null
+        frameReader.close()
+        saveHistory()
+        return engine.snapshot(SystemClock.elapsedRealtime()).reason == "disabled"
+    }
+
     @Synchronized internal fun isRunning(owner: Any): Boolean =
         sessionOwner === owner && engine.snapshot(SystemClock.elapsedRealtime()).enabled
 
     internal fun tick(owner: Any) {
+        if (!TermsConsent.isAccepted(app)) { disableForConsent(); return }
         if (!isRunning(owner)) return
         val sample = collectSample()
         synchronized(this) {
-            if (sessionOwner !== owner) return
+            if (!TermsConsent.isAccepted(app) || sessionOwner !== owner) return
             engine.observe(sample, SystemClock.elapsedRealtime())
             saveHistory()
         }

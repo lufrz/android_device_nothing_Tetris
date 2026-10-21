@@ -31,7 +31,9 @@ internal interface TcpControlPort {
     fun readCurrent(): String
     fun readAvailable(): String
     fun controlReady(): Boolean
+    fun clearPendingRequests(): Boolean
     fun request(algorithm: String)
+    fun restoreAfterConsent(algorithm: String) = request(algorithm)
     fun readBootAlgorithm(): String
     fun saveBootAlgorithm(algorithm: String)
 }
@@ -48,6 +50,36 @@ internal class TcpControlManager(
     private var owned: String? = null
 
     @Synchronized fun readState(): TcpState = snapshot()
+
+    /** Disable persistence and undo only this process's still-owned live value. */
+    @Synchronized fun disableForConsent(): Boolean {
+        val cleared = runCatching { port.clearPendingRequests() }.getOrDefault(false)
+        val persisted = runCatching {
+            port.saveBootAlgorithm("off")
+            port.readBootAlgorithm() == "off"
+        }.getOrDefault(false)
+        val before = snapshot()
+        val target = initial
+        if (owned == null || owned != before.current || target == null || target == before.current)
+            return persisted && cleared
+        if (!cleared || target !in before.available) return false
+        val restored = runCatching {
+            // Unlike ordinary requests, restoration remains available after the gate closes.
+            if (port.readCurrent().trim() != owned) return@runCatching true
+            port.restoreAfterConsent(target)
+            repeat(26) { attempt ->
+                val current = port.readCurrent().trim()
+                if (current == target) { owned = null; return@runCatching true }
+                if (current != before.current) { owned = null; return@runCatching false }
+                if (attempt < 25) pause(40)
+            }
+            false
+        }.getOrDefault(false)
+        // A restore command is also one-shot: a later revocation must never replay
+        // this old baseline over a value selected by another controller.
+        val neutral = runCatching { port.clearPendingRequests() }.getOrDefault(false)
+        return persisted && restored && neutral
+    }
 
     @Synchronized fun apply(target: String, expected: TcpState): TcpResult {
         val before = snapshot()

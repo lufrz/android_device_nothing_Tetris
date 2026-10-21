@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <string name="terms_title">Terms and conditions</string>
+    <string name="terms_introduction_required">Review the information below before using Tetris Parts. Choose Accept or Decline to continue. You can decline immediately and keep using the phone.</string>
+    <string name="terms_introduction_manual">Review the information below to enable Tetris Parts. You can decline or go back and keep using the phone.</string>
+    <string name="terms_choice_title">Your choice</string>
+    <string name="terms_choice_body">Accepting enables access to the optional controls in Tetris Parts; it does not turn on performance adjustments, monitoring or experimental audio. Each feature still requires your choice. Declining disables Parts features and their saved automatic activation. The normal phone functions remain available. You can open Tetris Parts in Settings to reconsider. Automatic review is requested only when these terms change or the maintainer explicitly requests it. Ordinary app or ROM updates and restarts do not repeat this request.</string>
+    <string name="terms_performance_title">Performance, battery and temperature</string>
+    <string name="terms_performance_body">CPU and GPU frequency limits, core controls and thermal settings can affect stability, responsiveness, battery life and heat. Disabling thermal throttling can remove limits intended to reduce overheating and can damage the device. Accepting these terms does not disable thermal controls. Use only settings appropriate for your device, monitor temperatures and restore defaults if the device becomes hot or unstable. Displayed readings are estimates and may be unavailable or delayed.</string>
+    <string name="terms_memory_title">Memory and Adaptive Control</string>
+    <string name="terms_memory_body">Closing background apps can interrupt their work, delay notifications or discard unsaved state. Adaptive Control uses device activity and performance measurements to suggest changes; measurements and suggestions can be incomplete or unsuitable for your workload. Proposed adjustments require your explicit approval. Monitoring and any saved settings that apply automatically must be enabled separately.</string>
+    <string name="terms_audio_title">Experimental audio</string>
+    <string name="terms_audio_body">Dual speaker, stereo, speaker routing, synchronization and gain controls change multimedia playback beyond the original mono configuration. The two speakers have different loudness and frequency response. Higher gain can increase distortion, power consumption, heat and wear or damage to the earpiece. Start with low volume and zero gain; stop using the feature if you hear crackling or the device becomes hot. Keep loud sound away from your ears. Availability and synchronization depend on the build, kernel and playback route.</string>
+    <string name="terms_network_title">Network controls</string>
+    <string name="terms_network_body">Wi-Fi, mobile network and TCP options depend on the hardware, kernel, carrier and Android permissions. Changing them can interrupt connectivity, increase power or mobile data use, or reduce performance. Your carrier charges and service conditions still apply. Restore defaults if connectivity worsens. Saving an option for restart is a separate choice.</string>
+    <string name="terms_data_title">Device information</string>
+    <string name="terms_data_body">Parts reads device information needed for the features you use, including CPU and GPU load, memory, battery, temperatures, network state and, for Adaptive Control, foreground app and frame performance information. Preferences and monitoring history may be stored on the device. Diagnostic files you choose to share can contain device or app information; review them before sharing. This notice covers Tetris Parts, not the data practices of other apps, ROM services or your carrier.</string>
+    <string name="terms_rom_title">Community ROMs and updates</string>
+    <string name="terms_rom_body">Feature availability and behavior vary with the ROM, firmware and kernel. Community builds and experimental changes may contain bugs, regressions or compatibility problems; successful operation on another device or build is not a guarantee. Keep a backup of important data before flashing or changing low-level settings, and follow the installation instructions for your exact device. An update may reset settings or require a new configuration. Tetris Parts cannot guarantee that every fault can be recovered without data loss.</string>
+    <string name="terms_rights_title">Licenses and your rights</string>
+    <string name="terms_rights_body">These terms explain the optional features and their risks. Android, LineageOS and other included components remain subject to their respective licenses and notices. Accepting does not transfer ownership of your data, replace third-party licenses or waive rights that cannot legally be waived. It does not imply endorsement by the device manufacturer.</string>
+    <string name="terms_accept">Accept</string>
+    <string name="terms_accept_countdown">Accept (%1$d s)</string>
+    <string name="terms_decline">Decline and disable Parts</string>
+    <string name="terms_applying">Applying your choice…</string>
+    <string name="terms_preparing">Disabling previous settings…</string>
+    <string name="terms_save_error">Parts remains disabled. Decline to continue using the phone, then reopen Tetris Parts to try again.</string>
+</resources>

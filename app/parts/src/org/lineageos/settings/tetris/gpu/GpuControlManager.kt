@@ -132,6 +132,18 @@ internal class GpuControlManager(
             expected.operatingPoints)
     }
 
+    /** Consent cleanup restores only an exact control/table snapshot owned by Parts. */
+    @Synchronized fun restoreOwned(expected: GpuControlSnapshot, target: GpuRawControls): GpuResult {
+        val before = readDriver()
+        val actual = before.settings?.let { GpuRawControls(it.limits.ceiling, it.limits.floor, it.fixed) }
+        if (actual != expected.controls || before.table != expected.operatingPoints)
+            return GpuResult(GpuFailure.CONFLICT)
+        if (!before.state.writable || actual == null) return GpuResult(GpuFailure.UNAVAILABLE)
+        if (listOf(target.ceilingIndex, target.floorIndex, target.fixedIndex).any { it != -1 && it !in before.table })
+            return GpuResult(GpuFailure.INVALID_FREQUENCY)
+        return apply(Settings(Limits(target.ceilingIndex, target.floorIndex), target.fixedIndex), before, before.table)
+    }
+
     private fun readUtilization(): GpuUtilization? = try {
         // ged_hal.c prints loading, blocked, idle as unsigned percentages. It is
         // a driver observation without a timestamp/window, not an FPS or jank estimate.

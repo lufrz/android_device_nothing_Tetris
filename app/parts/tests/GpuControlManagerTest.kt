@@ -547,5 +547,25 @@ fun main() {
         check(c.adaptiveRestore(applied.restoreToken!!).reason == "manual_override")
         check(d.writes.size == 1 && d.ceiling == 1)
     }
+    run("closed consent rejects a queued application GPU operation") { _ ->
+        org.lineageos.settings.tetris.consent.PartsControlGate.allowed = false
+        var called = false
+        val result = GpuControlSession.manual { called = true; GpuResult() }
+        check(!called && result.failure == GpuFailure.UNAVAILABLE)
+    }
+    run("consent cleanup restores a manually owned GPU range") { d ->
+        val c = GpuControlCoordinator(d.manager())
+        check(c.manual { it.setFrequencyRange(500000, 900000) }.successful)
+        check(c.releasePartsOverrides().successful)
+        check(d.ceiling == -1 && d.floor == -1)
+    }
+    run("consent cleanup never overwrites an external GPU range") { d ->
+        val c = GpuControlCoordinator(d.manager())
+        check(c.manual { it.setFrequencyRange(500000, 900000) }.successful)
+        d.ceiling = 2; d.floor = 3; d.publish()
+        val writes = d.writes.size
+        check(c.releasePartsOverrides().successful)
+        check(d.writes.size == writes && d.ceiling == 2 && d.floor == 3)
+    }
     println("$count GPU range/session checks passed")
 }

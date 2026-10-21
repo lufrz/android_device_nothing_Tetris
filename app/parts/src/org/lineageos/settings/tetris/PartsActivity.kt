@@ -20,6 +20,8 @@ import org.lineageos.settings.tetris.adaptive.AdaptiveScreen
 import org.lineageos.settings.tetris.adaptive.AdaptiveService
 import org.lineageos.settings.tetris.battery.BatteryScreen
 import org.lineageos.settings.tetris.cpu.CpuScreen
+import org.lineageos.settings.tetris.consent.TermsActivity
+import org.lineageos.settings.tetris.consent.TermsConsent
 import org.lineageos.settings.tetris.gpu.GpuScreen
 import org.lineageos.settings.tetris.network.NetworkScreen
 import org.lineageos.settings.tetris.memory.MemoryScreen
@@ -29,6 +31,7 @@ import org.lineageos.settings.tetris.ui.TetrisPartsTheme
 class PartsApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        TermsConsent.synchronize(this)
         DynamicColors.applyToActivitiesIfAvailable(this)
     }
 }
@@ -38,7 +41,7 @@ class PartsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!requireDeviceOwner()) return
+        if (!requireDeviceOwner() || !requireConsent()) return
         enableEdgeToEdge()
         setContent {
             TetrisPartsTheme {
@@ -59,13 +62,14 @@ class PartsActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (!isFinishing && !requireConsent()) return
         pageLaunchPending = false
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (UserHandle.myUserId() == UserHandle.USER_SYSTEM) openAdaptiveRequest(intent)
+        if (UserHandle.myUserId() == UserHandle.USER_SYSTEM && requireConsent()) openAdaptiveRequest(intent)
     }
 
     private fun openAdaptiveRequest(request: Intent) {
@@ -81,6 +85,7 @@ class PartsActivity : ComponentActivity() {
     }
 
     private fun openPage(page: PartsPage, proposalId: String? = null) {
+        if (!requireConsent()) return
         startActivity(Intent(this, PartsSubActivity::class.java).apply {
             putExtra(EXTRA_PAGE, page.route)
             if (page == PartsPage.ADAPTIVE && proposalId != null) {
@@ -105,7 +110,7 @@ class PartsSubActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!requireDeviceOwner()) return
+        if (!requireDeviceOwner() || !requireConsent()) return
         val route = if (savedInstanceState == null) intent.getStringExtra(EXTRA_PAGE)
             else savedInstanceState.getString(EXTRA_PAGE)
         val destination = PartsPage.fromRoute(route) ?: run {
@@ -138,11 +143,23 @@ class PartsSubActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!isFinishing && !requireConsent()) return
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString(EXTRA_PAGE, page?.route)
         outState.putString(STATE_PENDING_REVIEW, proposalToReview)
         super.onSaveInstanceState(outState)
     }
+}
+
+private fun ComponentActivity.requireConsent(): Boolean {
+    if (TermsConsent.synchronize(this)) return true
+    if (!isFinishing) startActivity(TermsActivity.intent(this, mandatory = false))
+    finish()
+    return false
 }
 
 private fun ComponentActivity.requireDeviceOwner(): Boolean {

@@ -201,5 +201,37 @@ fun main() {
         check(manager.readState().policies.first().locked)
         check(lock.readText().trim() == "1 400000 2000000")
     }
+    run("consent cleanup restores owned CPU bounds and cores") { root ->
+        val manager = CpuControlManager(root)
+        manager.readState()
+        check(manager.setFrequencyRange(0, 800000, 1600000).successful)
+        check(manager.setCoreOnline(7, false).successful)
+        check(manager.releasePartsOverrides().successful)
+        check(frequency(root, 0, "min") == 400000L && frequency(root, 0, "max") == 2000000L)
+        check(manager.readState().cores[7].online == true)
+    }
+    run("consent cleanup preserves CPU bounds replaced by another controller") { root ->
+        val manager = CpuControlManager(root)
+        check(manager.setFrequencyRange(0, 800000, 1600000).successful)
+        File(root, "cpufreq/policy0/scaling_max_freq").writeText("1200000")
+        check(manager.releasePartsOverrides().successful)
+        check(frequency(root, 0, "max") == 1200000L)
+    }
+    run("consent cleanup only releases an orphaned Parts kernel lock") { root ->
+        val lock = File(root, "cpufreq/policy0/scaling_locked_limits")
+        lock.writeText("1 800000 1600000")
+        File(lock.parentFile, "scaling_min_freq").writeText("800000")
+        File(lock.parentFile, "scaling_max_freq").writeText("1600000")
+        var writes = 0
+        val manager = CpuControlManager(root) { file, value ->
+            check(file == lock && value.trim() == "0")
+            writes++
+            file.writeText("0 400000 1200000")
+            File(file.parentFile, "scaling_min_freq").writeText("400000")
+            File(file.parentFile, "scaling_max_freq").writeText("1200000")
+        }
+        check(manager.releasePartsOverrides().successful)
+        check(writes == 1 && frequency(root, 0, "max") == 1200000L)
+    }
     println("$tests CPU checks passed")
 }

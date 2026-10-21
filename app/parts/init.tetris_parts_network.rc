@@ -2,53 +2,94 @@
 
 # Restore only at boot, after persistent properties are loaded. Saving a new
 # selection must not enqueue another live write after the app's verified request.
-on property:sys.boot_completed=1
+on property:sys.boot_completed=1 && property:sys.tetrisparts.consent=1
     trigger tetris-parts-tcp-restore
     trigger tetris-parts-tcp-ready
 
-on tetris-parts-tcp-restore && property:persist.sys.tetrisparts.tcp_congestion=reno
+on tetris-parts-tcp-restore && property:sys.tetrisparts.consent=1 && property:persist.sys.tetrisparts.tcp_congestion=reno
     write /proc/sys/net/ipv4/tcp_congestion_control reno
 
-on tetris-parts-tcp-restore && property:persist.sys.tetrisparts.tcp_congestion=cubic
+on tetris-parts-tcp-restore && property:sys.tetrisparts.consent=1 && property:persist.sys.tetrisparts.tcp_congestion=cubic
     write /proc/sys/net/ipv4/tcp_congestion_control cubic
 
-on tetris-parts-tcp-restore && property:persist.sys.tetrisparts.tcp_congestion=bic
+on tetris-parts-tcp-restore && property:sys.tetrisparts.consent=1 && property:persist.sys.tetrisparts.tcp_congestion=bic
     write /proc/sys/net/ipv4/tcp_congestion_control bic
 
-on tetris-parts-tcp-restore && property:persist.sys.tetrisparts.tcp_congestion=westwood
+on tetris-parts-tcp-restore && property:sys.tetrisparts.consent=1 && property:persist.sys.tetrisparts.tcp_congestion=westwood
     write /proc/sys/net/ipv4/tcp_congestion_control westwood
 
-on tetris-parts-tcp-restore && property:persist.sys.tetrisparts.tcp_congestion=htcp
+on tetris-parts-tcp-restore && property:sys.tetrisparts.consent=1 && property:persist.sys.tetrisparts.tcp_congestion=htcp
     write /proc/sys/net/ipv4/tcp_congestion_control htcp
 
-on tetris-parts-tcp-restore && property:persist.sys.tetrisparts.tcp_congestion=bbr
+on tetris-parts-tcp-restore && property:sys.tetrisparts.consent=1 && property:persist.sys.tetrisparts.tcp_congestion=bbr
     write /proc/sys/net/ipv4/tcp_congestion_control bbr
 
-on tetris-parts-tcp-restore && property:persist.sys.tetrisparts.tcp_congestion=bbr3
+on tetris-parts-tcp-restore && property:sys.tetrisparts.consent=1 && property:persist.sys.tetrisparts.tcp_congestion=bbr3
     write /proc/sys/net/ipv4/tcp_congestion_control bbr3
 
 # The separate event runs after all matching restore actions. Absent/off saves
 # leave the kernel default untouched; a rejected restore must not block controls.
-on tetris-parts-tcp-ready
+on tetris-parts-tcp-ready && property:sys.tetrisparts.consent=1
     setprop sys.tetrisparts.tcp_ready 1
 
-on property:sys.tetrisparts.tcp_congestion=reno
+on property:sys.tetrisparts.consent=1 && property:sys.tetrisparts.tcp_congestion=reno
     write /proc/sys/net/ipv4/tcp_congestion_control reno
+    setprop sys.tetrisparts.tcp_congestion off
 
-on property:sys.tetrisparts.tcp_congestion=cubic
+on property:sys.tetrisparts.consent=1 && property:sys.tetrisparts.tcp_congestion=cubic
     write /proc/sys/net/ipv4/tcp_congestion_control cubic
+    setprop sys.tetrisparts.tcp_congestion off
 
-on property:sys.tetrisparts.tcp_congestion=bic
+on property:sys.tetrisparts.consent=1 && property:sys.tetrisparts.tcp_congestion=bic
     write /proc/sys/net/ipv4/tcp_congestion_control bic
+    setprop sys.tetrisparts.tcp_congestion off
 
-on property:sys.tetrisparts.tcp_congestion=westwood
+on property:sys.tetrisparts.consent=1 && property:sys.tetrisparts.tcp_congestion=westwood
     write /proc/sys/net/ipv4/tcp_congestion_control westwood
+    setprop sys.tetrisparts.tcp_congestion off
 
-on property:sys.tetrisparts.tcp_congestion=htcp
+on property:sys.tetrisparts.consent=1 && property:sys.tetrisparts.tcp_congestion=htcp
     write /proc/sys/net/ipv4/tcp_congestion_control htcp
+    setprop sys.tetrisparts.tcp_congestion off
 
-on property:sys.tetrisparts.tcp_congestion=bbr
+on property:sys.tetrisparts.consent=1 && property:sys.tetrisparts.tcp_congestion=bbr
     write /proc/sys/net/ipv4/tcp_congestion_control bbr
+    setprop sys.tetrisparts.tcp_congestion off
 
-on property:sys.tetrisparts.tcp_congestion=bbr3
+on property:sys.tetrisparts.consent=1 && property:sys.tetrisparts.tcp_congestion=bbr3
     write /proc/sys/net/ipv4/tcp_congestion_control bbr3
+    setprop sys.tetrisparts.tcp_congestion off
+
+# Revocation makes controls unavailable immediately. Only a previously validated
+# consent can request a saved restore; ordinary reboots do not reopen the UI.
+on property:sys.tetrisparts.consent=0
+    setprop sys.tetrisparts.tcp_ready 0
+
+# Baseline restoration is available while Parts is disabled.
+on property:sys.tetrisparts.tcp_restore=reno && property:sys.tetrisparts.consent=0
+    write /proc/sys/net/ipv4/tcp_congestion_control reno
+    setprop sys.tetrisparts.tcp_restore off
+
+on property:sys.tetrisparts.tcp_restore=cubic && property:sys.tetrisparts.consent=0
+    write /proc/sys/net/ipv4/tcp_congestion_control cubic
+    setprop sys.tetrisparts.tcp_restore off
+
+on property:sys.tetrisparts.tcp_restore=bic && property:sys.tetrisparts.consent=0
+    write /proc/sys/net/ipv4/tcp_congestion_control bic
+    setprop sys.tetrisparts.tcp_restore off
+
+on property:sys.tetrisparts.tcp_restore=westwood && property:sys.tetrisparts.consent=0
+    write /proc/sys/net/ipv4/tcp_congestion_control westwood
+    setprop sys.tetrisparts.tcp_restore off
+
+on property:sys.tetrisparts.tcp_restore=htcp && property:sys.tetrisparts.consent=0
+    write /proc/sys/net/ipv4/tcp_congestion_control htcp
+    setprop sys.tetrisparts.tcp_restore off
+
+on property:sys.tetrisparts.tcp_restore=bbr && property:sys.tetrisparts.consent=0
+    write /proc/sys/net/ipv4/tcp_congestion_control bbr
+    setprop sys.tetrisparts.tcp_restore off
+
+on property:sys.tetrisparts.tcp_restore=bbr3 && property:sys.tetrisparts.consent=0
+    write /proc/sys/net/ipv4/tcp_congestion_control bbr3
+    setprop sys.tetrisparts.tcp_restore off

@@ -4,6 +4,8 @@
  */
 package org.lineageos.settings.tetris.memory
 
+import org.lineageos.settings.tetris.consent.TermsConsent
+
 import android.app.ActivityManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
@@ -115,7 +117,7 @@ internal class MemoryRepository(context: Context) {
         var skipped = 0
         var failed = 0
         for (app in selected.distinctBy { it.packageName }) {
-            if (!shouldContinue()) break
+            if (!shouldContinue() || !TermsConsent.isAccepted(context)) break
             if (!canStop() || manager == null) {
                 failed++
                 continue
@@ -130,7 +132,7 @@ internal class MemoryRepository(context: Context) {
                 skipped++
                 continue
             }
-            if (!shouldContinue()) break
+            if (!shouldContinue() || !TermsConsent.isAccepted(context)) break
             try {
                 manager.killBackgroundProcesses(app.packageName)
                 // The API returns void: this is a request, not proof that an app stopped.

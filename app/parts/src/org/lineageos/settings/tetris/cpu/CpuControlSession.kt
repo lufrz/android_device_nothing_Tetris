@@ -4,6 +4,7 @@
 package org.lineageos.settings.tetris.cpu
 
 import java.io.File
+import org.lineageos.settings.tetris.consent.PartsControlGate
 
 internal data class CpuSessionSnapshot(val state: CpuState, val manualRevision: Long)
 internal data class AdaptiveCpuWrite(val successful: Boolean, val reason: String, val maximum: Long?)
@@ -21,7 +22,7 @@ internal class CpuControlCoordinator(
     @Synchronized fun snapshot() = CpuSessionSnapshot(manager.readState(), revision)
 
     @Synchronized fun <T> manual(block: (CpuControlManager) -> T): T {
-        // Invalidate AI ownership even if a requested manual operation fails or keeps the same value.
+        // Invalidate adaptive ownership even if a requested manual operation fails or keeps the same value.
         revision++
         return block(manager)
     }
@@ -55,7 +56,10 @@ internal class CpuControlCoordinator(
 internal object CpuControlSession {
     private val coordinator = CpuControlCoordinator()
     fun <T> read(block: (CpuControlManager) -> T): T = coordinator.read(block)
-    fun <T> manual(block: (CpuControlManager) -> T): T = coordinator.manual(block)
+    fun manual(block: (CpuControlManager) -> CpuResult): CpuResult = coordinator.manual {
+        if (PartsControlGate.allowed) block(it) else CpuResult(CpuFailure.UNAVAILABLE)
+    }
+    fun releasePartsOverrides(): CpuResult = coordinator.manual { it.releasePartsOverrides() }
     fun snapshot(): CpuSessionSnapshot = coordinator.snapshot()
     fun adaptiveMaximum(id: Int, minimum: Long, maximum: Long, target: Long, revision: Long) =
         coordinator.adaptiveMaximum(id, minimum, maximum, target, revision)

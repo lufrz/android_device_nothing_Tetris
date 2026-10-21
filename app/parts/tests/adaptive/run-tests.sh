@@ -10,6 +10,7 @@ trap 'rm -rf -- "$test_output"' EXIT
 java_root=${JAVA_HOME:-$tree_root/prebuilts/jdk/jdk21/linux-x86}
 
 JAVA_HOME="$java_root" "$tree_root/external/kotlinc/bin/kotlinc" \
+    "$source_dir/consent/PartsControlGate.kt" \
     "$source_dir/cpu/CpuControlManager.kt" \
     "$source_dir/cpu/CpuControlSession.kt" \
     "$source_dir/adaptive/FrameTelemetryModels.kt" \

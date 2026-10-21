@@ -2,7 +2,7 @@ sys.tetrisparts.thermal_disabled u:object_r:tetrisparts_thermal_request_prop:s0 
 init.svc.thermal_core u:object_r:tetrisparts_thermal_daemon_prop:s0 exact string
 
 # The app requests one fixed init action; it cannot write network sysctls itself.
-sys.tetrisparts.tcp_congestion u:object_r:tetrisparts_tcp_request_prop:s0 exact enum reno cubic bic westwood htcp bbr bbr3
+sys.tetrisparts.tcp_congestion u:object_r:tetrisparts_tcp_request_prop:s0 exact enum off reno cubic bic westwood htcp bbr bbr3
 persist.sys.tetrisparts.tcp_congestion u:object_r:tetrisparts_tcp_request_prop:s0 exact enum off reno cubic bic westwood htcp bbr bbr3
 sys.tetrisparts.tcp_ready u:object_r:tetrisparts_tcp_status_prop:s0 exact bool
 
@@ -14,3 +14,4 @@ persist.sys.tetris.audio_output u:object_r:tetris_parts_audio_prop:s0 exact enum
 
 # Volatile gate: Parts validates the current terms before restoring saved features.
 sys.tetrisparts.consent u:object_r:tetris_parts_audio_prop:s0 exact bool
+sys.tetrisparts.tcp_restore u:object_r:tetrisparts_tcp_request_prop:s0 exact enum off reno cubic bic westwood htcp bbr bbr3

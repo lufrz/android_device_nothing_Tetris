@@ -2,6 +2,7 @@
 package org.lineageos.settings.tetris.thermal
 
 import android.os.SystemProperties
+import org.lineageos.settings.tetris.consent.PartsControlGate
 
 internal data class ThermalState(
     val mode: String,
@@ -24,6 +25,11 @@ internal object ThermalController {
     )
 
     fun request(disabled: Boolean) {
-        SystemProperties.set("sys.tetrisparts.thermal_disabled", if (disabled) "1" else "0")
+        if (disabled) {
+            PartsControlGate.runIfAllowed {
+                if (SystemProperties.get("sys.tetrisparts.consent", "0") == "1")
+                    SystemProperties.set("sys.tetrisparts.thermal_disabled", "1")
+            }
+        } else SystemProperties.set("sys.tetrisparts.thermal_disabled", "0")
     }
 }

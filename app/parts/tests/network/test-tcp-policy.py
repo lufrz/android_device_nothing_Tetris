@@ -50,7 +50,7 @@ request_context = re.search(
     r"^" + re.escape(request) + r"\s+u:object_r:tetrisparts_tcp_request_prop:s0\s+exact enum (.+)$",
     contexts, re.M)
 require(request_context is not None, "request property uses an exact enum context")
-require(set(request_context[1].split()) == set(supported), "request enum matches the selector")
+require(set(request_context[1].split()) == {"off", *supported}, "request enum adds a neutral off command")
 saved_context = re.search(
     r"^" + re.escape(saved) + r"\s+u:object_r:tetrisparts_tcp_request_prop:s0\s+exact enum (.+)$",
     contexts, re.M)
@@ -75,20 +75,32 @@ for raw in rc.splitlines():
         require(trigger is not None and raw[0].isspace(), "init contains only action commands")
         actions[trigger].append(line)
 
-require(actions.pop("property:sys.boot_completed=1", None) == [
+gate = "property:sys.tetrisparts.consent=1"
+closed = "property:sys.tetrisparts.consent=0"
+restore_request = "sys.tetrisparts.tcp_restore"
+require(actions.pop("property:sys.boot_completed=1 && " + gate, None) == [
     f"trigger {restore_event}", f"trigger {ready_event}"],
-    "boot queues restore before a separate readiness event")
-require(actions.pop(ready_event, None) == [f"setprop {ready} 1"],
-        "readiness follows boot restoration")
-live_triggers = {f"property:{request}={name}" for name in supported}
-boot_triggers = {f"{restore_event} && property:{saved}={name}" for name in supported}
-require(set(actions) == live_triggers | boot_triggers,
-        "only fixed live and boot requests can write TCP")
+    "validated consent queues restore before a separate readiness event")
+require(actions.pop(f"{ready_event} && {gate}", None) == [f"setprop {ready} 1"],
+        "readiness is advertised only while consent remains valid")
+require(actions.pop(closed, None) == [f"setprop {ready} 0"],
+        "revocation immediately clears readiness")
+restore_context = re.search(r"^" + re.escape(restore_request) +
+    r"\s+u:object_r:tetrisparts_tcp_request_prop:s0\s+exact enum (.+)$", contexts, re.M)
+require(restore_context is not None and set(restore_context[1].split()) == {"off", *supported},
+    "cleanup request uses the restricted enum with a neutral off command")
+live_triggers = {f"{gate} && property:{request}={name}" for name in supported}
+boot_triggers = {f"{restore_event} && {gate} && property:{saved}={name}" for name in supported}
+cleanup_triggers = {f"property:{restore_request}={name} && {closed}" for name in supported}
+require(set(actions) == live_triggers | boot_triggers | cleanup_triggers,
+        "only fixed gated live/boot requests and disabled-state cleanup can write TCP")
 for name in supported:
-    require(actions[f"property:{request}={name}"] == [f"write {sysctl} {name}"],
-            f"{name} writes one fixed value")
-    require(actions[f"{restore_event} && property:{saved}={name}"] == [f"write {sysctl} {name}"],
-            f"{name} restores one fixed saved value")
+    require(actions[f"{gate} && property:{request}={name}"] == [f"write {sysctl} {name}", f"setprop {request} off"],
+            f"{name} writes one fixed value only with consent")
+    require(actions[f"{restore_event} && {gate} && property:{saved}={name}"] == [f"write {sysctl} {name}"],
+            f"{name} restores one fixed saved value only with consent")
+    require(actions[f"property:{restore_request}={name} && {closed}"] == [f"write {sysctl} {name}", f"setprop {restore_request} off"],
+            f"{name} cleanup remains available after revocation")
 require(all("off" not in trigger for trigger in boot_triggers),
         "off or an absent saved selection leaves the boot default unchanged")
 require(not any(trigger.startswith(f"property:{saved}=") for trigger in actions),

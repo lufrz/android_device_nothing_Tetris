@@ -10,6 +10,7 @@ open class ComponentActivity {
     val intent: Intent get() = currentIntent
     val launched = mutableListOf<Intent>()
     var finishCount = 0
+    val isFinishing: Boolean get() = finishCount != 0
     var edgeToEdgeEnabled = false
     var content: (() -> Unit)? = null
     protected open fun onCreate(savedInstanceState: Bundle?) {}
