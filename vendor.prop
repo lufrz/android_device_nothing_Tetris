@@ -248,7 +248,9 @@ ro.vendor.fingerprint.sensor_location=540|2109|93
 ro.vendor.fingerprint.type=udfps_optical
 
 # Graphics
-debug.renderengine.backend=skiaglthreaded
+# Use Ganesh Vulkan through SurfaceFlinger's capability check.
+debug.renderengine.graphite=false
+debug.renderengine.vulkan=true
 debug.stagefright.c2inputsurface=-1
 graphics.gpu.profiler.support=true
 ro.gfx.driver.0=com.mediatek.mt6878.gamedriver
