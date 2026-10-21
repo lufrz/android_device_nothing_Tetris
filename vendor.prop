@@ -19,8 +19,6 @@ persist.vendor.audiohal.p2w_dump_on=0
 persist.vendor.audiohal.pcm_mixer_dump_on=0
 persist.vendor.debug_policy=minidump
 persist.vendor.audiohal.aurisys.pcm_dump_on=0
-persist.vendor.audiohal.p2w_dump_on=0
-persist.vendor.audiohal.pcm_mixer_dump_on=0
 persist.vendor.debug_policy.ready=1
 ro.bluetooth.a2dp_offload.supported=true
 ro.bluetooth.leaudio_offload.supported=false
@@ -476,11 +474,9 @@ ro.vendor.ap_info_monitor=0
 ro.vendor.md_auto_setup_ims=1
 ro.vendor.md_log_memdump_wait=15
 ro.vendor.md_prop_ver=1
-ro.vendor.mtk_c2k_lte_mode=0
 ro.vendor.mtk_data_config=1
 ro.vendor.mtk_eccci_c2k=1
 ro.vendor.mtk_external_sim_only_slots=0
-ro.vendor.mtk_fd_support=1
 ro.vendor.mtk_gwsd_capability=2
 ro.vendor.mtk_lte_support=1
 ro.vendor.mtk_mcf_support=1
@@ -499,7 +495,6 @@ ro.vendor.mtk_sim_card_onoff=3
 ro.vendor.mtk_sim_hot_swap_common_slot=1
 ro.vendor.mtk_single_bin_modem_support=1
 ro.vendor.mtk_thin_md_telephony_support_mode=0
-ro.vendor.mtk_wappush_support=1
 ro.vendor.mtk_world_phone_policy=0
 ro.vendor.num_md_protocol=2
 ro.vendor.radio.max.multisim=dsds
@@ -518,13 +513,6 @@ ro.vendor.mtk_thermal_2_0=1
 
 # USB
 vendor.usb.controller=11201000.usb0
-
-# Wifi
-ro.vendor.wifi.sap.concurrent.iface=ap1
-ro.vendor.wifi.sap.interface=ap0
-ro.vendor.wlan.chrdev=wmt_chrdev_wifi_connac2
-ro.vendor.wlan.gen=gen4m_6878
-
 
 # ZRAM writeback
 ro.zram.mark_idle_delay_mins=60

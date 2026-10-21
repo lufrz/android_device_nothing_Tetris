@@ -1317,8 +1317,6 @@ vendor/lib64/liboemcrypto.so
 vendor/lib64/liburee_meta_drmkeyinstall.so
 
 # Wi-Fi
-vendor/bin/wmt_launcher
-vendor/bin/wmt_loader
 vendor/etc/init/init.wlan_drv.rc
 vendor/etc/vintf/manifest/CommandService.xml
 vendor/etc/wifi/wpa_supplicant.conf
