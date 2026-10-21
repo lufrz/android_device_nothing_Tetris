@@ -50,6 +50,7 @@ import org.lineageos.settings.tetris.ui.PartsPreferenceGroup
 import org.lineageos.settings.tetris.ui.PartsScaffold
 import org.lineageos.settings.tetris.ui.PartsSwitchPreference
 import org.lineageos.settings.tetris.ui.rememberPartsResumed
+import org.lineageos.settings.tetris.ui.rememberSliderHaptics
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -257,6 +258,7 @@ private fun FrequencyRangeDialog(
 ) {
     val frequencies = policy.frequencies
     if (frequencies.isEmpty()) return
+    val tick = rememberSliderHaptics()
     fun index(value: Long) = frequencies.indices.minByOrNull { abs(frequencies[it] - value) } ?: 0
     var range by remember(policy.id) {
         mutableStateOf(index(policy.minimum).toFloat()..index(policy.maximum).toFloat())
@@ -273,7 +275,11 @@ private fun FrequencyRangeDialog(
                 if (frequencies.size > 1) {
                     RangeSlider(
                         value = range,
-                        onValueChange = { range = it },
+                        onValueChange = { next ->
+                            if (next.start.roundToInt() != range.start.roundToInt() ||
+                                next.endInclusive.roundToInt() != range.endInclusive.roundToInt()) tick()
+                            range = next
+                        },
                         valueRange = 0f..frequencies.lastIndex.toFloat(),
                         steps = (frequencies.size - 2).coerceAtLeast(0),
                     )

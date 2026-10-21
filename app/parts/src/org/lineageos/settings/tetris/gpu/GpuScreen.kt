@@ -53,6 +53,7 @@ import org.lineageos.settings.tetris.ui.PartsPreference
 import org.lineageos.settings.tetris.ui.PartsPreferenceGroup
 import org.lineageos.settings.tetris.ui.PartsScaffold
 import org.lineageos.settings.tetris.ui.rememberPartsResumed
+import org.lineageos.settings.tetris.ui.rememberSliderHaptics
 
 @Composable
 fun GpuScreen(onBack: () -> Unit) {
@@ -275,6 +276,7 @@ fun GpuScreen(onBack: () -> Unit) {
 private fun GpuRangeDialog(gpu: GpuState, onDismiss: () -> Unit, onApply: (Long, Long) -> Unit) {
     val frequencies = remember(gpu.frequenciesKHz) { gpu.frequenciesKHz.distinct().sorted() }
     if (frequencies.isEmpty()) return
+    val tick = rememberSliderHaptics()
     fun index(value: Long) = frequencies.indices.minByOrNull { abs(frequencies[it] - value) } ?: 0
     val initialMin = gpu.requestedMinimumKHz ?: gpu.fixedKHz ?: frequencies.first()
     val initialMax = gpu.requestedMaximumKHz ?: gpu.fixedKHz ?: frequencies.last()
@@ -303,7 +305,11 @@ private fun GpuRangeDialog(gpu: GpuState, onDismiss: () -> Unit, onApply: (Long,
                             if (frequencies.size > 1) {
                                 RangeSlider(
                                     value = range,
-                                    onValueChange = { range = it },
+                                    onValueChange = { next ->
+                                        if (next.start.roundToInt() != range.start.roundToInt() ||
+                                            next.endInclusive.roundToInt() != range.endInclusive.roundToInt()) tick()
+                                        range = next
+                                    },
                                     valueRange = 0f..frequencies.lastIndex.toFloat(),
                                     steps = (frequencies.size - 2).coerceAtLeast(0),
                                 )
