@@ -91,6 +91,8 @@ blob_fixups: blob_fixups_user_type = {
         .add_line_if_missing('rsn_overriding=1'),
     'vendor/lib64/hw/android.hardware.audio@7.1-impl-mediatek.so': blob_fixup()
         .replace_needed('android.hardware.audio@7.1-util.so', 'android.hardware.audio@7.1-util-v34.so'),
+    'vendor/lib64/hw/android.hardware.soundtrigger3-impl.so': blob_fixup()
+        .replace_needed('libaudio_aidl_conversion_common_ndk.so', 'libaudio_aidl_conversion_common_ndk-v34.so'),
     'vendor/lib64/hw/audio.primary.mediatek.so': blob_fixup()
         .add_needed('libstagefright_foundation-v33.so')
         .replace_needed('libalsautils.so', 'libalsautils-v33.so')

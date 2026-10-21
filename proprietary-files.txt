@@ -8,7 +8,10 @@ vendor/etc/MBrain_dynamic.xml
 vendor/etc/AudioLog_dynamic.xml
 vendor/lib64/hw/audio.primary.mediatek.so;SYMLINK=vendor/lib64/hw/audio.primary.mt6878.so;DISABLE_DEPS
 vendor/lib64/hw/android.hardware.audio@7.1-impl-mediatek.so
+vendor/lib64/hw/android.hardware.soundtrigger3-impl.so
+vendor/lib64/hw/vendor.mediatek.hardware.audio-impl.so
 vendor/lib64/android.hardware.audio@7.1-util.so:vendor/lib64/android.hardware.audio@7.1-util-v34.so;FIX_SONAME
+vendor/lib64/libaudio_aidl_conversion_common_ndk.so:vendor/lib64/libaudio_aidl_conversion_common_ndk-v34.so;FIX_SONAME
 vendor/lib64/hw/sound_trigger.primary.default.so
 vendor/lib64/libalsautils.so:vendor/lib64/libalsautils-v33.so;FIX_SONAME
 vendor/lib64/soundfx/libaudiopreprocessing_mtk.so
@@ -49,6 +52,7 @@ vendor/lib64/libvow_ap_test_trip_hh.so
 vendor/lib64/libvow_ap_test_trip_nn.so
 vendor/lib64/libvow_comp_test.so
 vendor/lib64/vendor.mediatek.hardware.audio@8.1.so
+vendor/lib64/vendor.mediatek.hardware.audio@6.1.so
 vendor/lib64/libawinicsmartpaparse.so
 
 # Audio (Device)
