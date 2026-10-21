@@ -796,7 +796,7 @@ internal class AdaptiveEngine(
 
     private fun frameReason(sample: AdaptiveSample, now: Long = sample.elapsedMs): String? {
         val f = sample.frames ?: return when (sample.frameTelemetryReason) {
-            "frames_changed", "insufficient_frames" -> sample.frameTelemetryReason
+            "frames_changed", "insufficient_frames", "collecting_frames", "monitoring_screen" -> sample.frameTelemetryReason
             else -> "frames_unavailable"
         }
         if (f.contextKey.isBlank() || f.frameCount <= 0 || f.jankyFrames !in 0..f.frameCount ||

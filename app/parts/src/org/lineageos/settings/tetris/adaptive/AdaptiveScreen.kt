@@ -631,7 +631,9 @@ private fun actionLabel(action: String): Int = when (action) {
 }
 
 private fun reasonLabel(reason: String): Int = when (reason) {
-    "frames_unavailable", "insufficient_frames", "inconclusive_frames", "collecting_frames" -> R.string.adaptive_frames_waiting
+    "frames_unavailable" -> R.string.adaptive_frames_unavailable
+    "monitoring_screen" -> R.string.adaptive_monitoring_screen
+    "insufficient_frames", "inconclusive_frames", "collecting_frames" -> R.string.adaptive_frames_waiting
     "frames_changed" -> R.string.adaptive_frames_changed
     "frame_improved" -> R.string.adaptive_frames_improved
     "frame_regression", "no_frame_improvement" -> R.string.adaptive_frames_regressed

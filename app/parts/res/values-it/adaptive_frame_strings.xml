@@ -12,6 +12,8 @@
     <string name="adaptive_milliseconds">%1$.1f ms</string>
     <string name="adaptive_frames_partial">Misura i frame recenti dell’app in uso. Il campionamento è parziale. Non misura i ritardi di rete o di risposta ai comandi.</string>
     <string name="adaptive_frames_waiting">In attesa di misurazioni dei frame sufficienti e confrontabili prima di proporre una modifica.</string>
+    <string name="adaptive_frames_unavailable">Non sono disponibili misurazioni utilizzabili dei frame dell’app in uso. Senza questi dati non verranno proposte modifiche alle frequenze.</string>
+    <string name="adaptive_monitoring_screen">Tetris Parts non misura la propria schermata. Usa un’altra app per almeno un minuto: il monitoraggio continua in background e riceverai una notifica se viene individuata una modifica adatta.</string>
     <string name="adaptive_frames_changed">L’app, la superficie di rendering o i tempi dei frame sono cambiati. Servono nuove misurazioni.</string>
     <string name="adaptive_frames_improved">Sono stati misurati meno frame in ritardo o scartati, entro i limiti della prova.</string>
     <string name="adaptive_frames_regressed">La prova non ha raggiunto l’obiettivo di fluidità dei frame.</string>

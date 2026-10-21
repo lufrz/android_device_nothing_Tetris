@@ -287,7 +287,7 @@ fun main() {
         val f = Fixture(); f.approvedBaseline(); f.result(); f.engine.stop(31_000, 1_031_000)
         check(f.cpu.maximum() == 3_000L && !f.state().enabled)
     }
-    test("manual intent revokes AI ownership even if it preserves the exact limit") {
+    test("manual intent revokes adaptive ownership even if it preserves the exact limit") {
         val f = Fixture(); f.approvedBaseline(); f.cpu.revision++
         f.engine.observe(sample(20_000)); f.engine.stop(21_000, 1_021_000)
         check(f.cpu.maximum() == 2_000L && f.cpu.writes.size == 1)
@@ -597,6 +597,37 @@ fun main() {
         check(f.state().pendingProposal?.id == id)
         check(f.engine.approveProposal(id, sample(31_000, load = 55.0)).reason == "candidate_rejected")
         check(f.cpu.attempts.isEmpty())
+    }
+    test("Parts explains its excluded screen and a real workload can still produce a proposal") {
+        val review = "org.lineageos.settings.tetris"
+        val cpu = FakeCpu()
+        // Use the production six-sample window and sixty-second decision interval.
+        val engine = AdaptiveEngine(cpu, reviewWorkloadKey = review)
+        engine.start(AdaptiveObjective.BATTERY, 0, 1_000_000)
+        for (at in 5_000L..65_000L step 5_000L) {
+            engine.observe(sample(at, workload = review).copy(frames = null,
+                frameTelemetryReason = "monitoring_screen"))
+            val state = engine.snapshot(at)
+            check(state.reason == "monitoring_screen" && state.pendingProposal == null)
+            check(cpu.attempts.isEmpty())
+        }
+        val analyzer = FrameTelemetryAnalyzer()
+        engine.observe(analyzed(analyzer, sample(70_000), 100))
+        check(engine.snapshot(70_000).reason == "collecting_frames")
+        for ((i, at) in (75_000L..100_000L step 5_000L).withIndex()) {
+            engine.observe(analyzed(analyzer, sample(at), 200L + i * 100))
+            if (at < 100_000) check(engine.snapshot(at).pendingProposal == null)
+        }
+        val proposal = checkNotNull(engine.snapshot(100_000).pendingProposal)
+        check(proposal.baseline.workloadKey == "example.app" && cpu.attempts.isEmpty())
+        analyzer.pauseForReview()
+        val reviewing = sample(105_000, workload = review).copy(frames = null,
+            frameTelemetryReason = "monitoring_screen")
+        engine.observe(reviewing)
+        check(engine.snapshot(105_000).reason == "awaiting_approval")
+        check(engine.snapshot(105_000).pendingProposal?.id == proposal.id && cpu.attempts.isEmpty())
+        check(engine.approveProposal(proposal.id, reviewing.copy(elapsedMs = 106_000)).successful)
+        check(cpu.writes.size == 1 && engine.snapshot(106_000).reason == "waiting_original_workload")
     }
     test("notification review preserves the proposal and compares results only after the original workload returns") {
         val reviewApp = "org.lineageos.settings.tetris"

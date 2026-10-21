@@ -46,7 +46,7 @@ internal class FrameTelemetryReader(context: Context) {
             // The notification review is not a new measured workload. Preserve its identity,
             // then consume the first returning ring without attributing old frames to the trial.
             analyzer.pauseForReview()
-            return unavailable("frames_unavailable")
+            return unavailable("monitoring_screen")
         }
         return try {
             if (workload != workloadPackage) {
