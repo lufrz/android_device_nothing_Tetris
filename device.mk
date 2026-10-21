@@ -47,8 +47,8 @@ PRODUCT_PACKAGES += \
     android.hardware.audio.effect@7.0-impl \
     android.hardware.audio.service.mediatek \
     android.hardware.bluetooth.audio-impl \
-    android.hardware.bluetooth.audio-V3-ndk.vendor \
-    android.hardware.soundtrigger@2.3-impl
+    android.hardware.bluetooth.audio-impl-mediatek-hidl \
+    android.hardware.bluetooth.audio-V3-ndk.vendor
 
 PRODUCT_PACKAGES += \
     audio.primary.default \
@@ -80,6 +80,11 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.software.midi.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.software.midi.xml
 
 # Bluetooth
+# Use the stock MTK HIDL backend with the current Bluetooth AIDL adapter.
+PRODUCT_SOURCE_ROOT_DIRS += \
+    -hardware/mediatek/aidl/bluetooth_audio/aidl_adapter \
+    -hardware/mediatek/interfaces/hardware/bluetooth/audio/aidl
+
 PRODUCT_PACKAGES += \
     android.hardware.bluetooth-service.mediatek
 

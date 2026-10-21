@@ -40,7 +40,6 @@ vendor.streamin.pcm.dump=0
 # Bluetooth
 bluetooth.device_id.vendor_id=0x0046
 bluetooth.device.default_name=CMF Phone 1
-persist.bluetooth.a2dp_offload.disabled=false
 persist.vendor.audio.leaudio_sw_offload=true
 persist.vendor.bluetooth.leaudio_mode=ums-cg
 

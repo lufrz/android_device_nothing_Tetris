@@ -62,6 +62,7 @@ lib_fixups: lib_fixups_user_type = {
         'libneuron_graph_delegate.mtk',
         'libtflite_mtk',
         'vendor.mediatek.hardware.apuware.utils@2.0',
+        'vendor.mediatek.hardware.bluetooth.audio-V1-ndk',
         'vendor.mediatek.hardware.videotelephony@1.0'
     ): lib_fixup_vendor_suffix,
 }
