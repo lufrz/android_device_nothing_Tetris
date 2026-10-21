@@ -56,6 +56,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.lineageos.settings.tetris.R
 
@@ -71,6 +72,7 @@ private val PartsItemShape = RoundedCornerShape(4.dp)
 fun PartsScaffold(
     title: String,
     onBack: (() -> Unit)? = null,
+    expandedHeight: Dp = TopAppBarDefaults.LargeAppBarExpandedHeight,
     actions: @Composable RowScope.() -> Unit = {},
     floatingActionButton: @Composable () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit,
@@ -99,6 +101,7 @@ fun PartsScaffold(
                     }
                 },
                 actions = actions,
+                expandedHeight = expandedHeight,
                 scrollBehavior = scrollBehavior,
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,

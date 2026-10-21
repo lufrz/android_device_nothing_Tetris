@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <string name="parts_device_android">Android %1$s</string>
+    <string name="parts_device_maintainer">Maintainer: %1$s</string>
+    <string name="parts_spec_processor">Processore</string>
+    <string name="parts_spec_camera">Fotocamere</string>
+    <string name="parts_spec_ram">RAM</string>
+    <string name="parts_spec_storage">Archiviazione</string>
+    <string name="parts_spec_battery">Batteria</string>
+    <string name="parts_spec_screen">Schermo</string>
+    <string name="parts_spec_camera_tetris">Posteriore: 50 MP + sensore ritratto\nFrontale: 16 MP</string>
+    <string name="parts_spec_battery_capacity">5000 mAh (tip.)</string>
+    <string name="parts_spec_display">Super AMOLED da 6,67\"\n1080 × 2400 · 120 Hz</string>
+    <string name="parts_spec_loading">Caricamento…</string>
+    <string name="parts_spec_unavailable">Non disponibile</string>
+</resources>

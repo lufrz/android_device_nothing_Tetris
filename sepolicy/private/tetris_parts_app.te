@@ -10,6 +10,7 @@ allow tetris_parts_app {
     audioserver_service
     autofill_service
     batteryproperties_service
+    batterystats_service
     clipboard_service
     legacy_permission_service
     # PhoneWindow dispatches hardware volume keys through MediaSessionManager.
