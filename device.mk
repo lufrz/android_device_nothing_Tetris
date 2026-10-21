@@ -184,8 +184,6 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/init/init.recovery.mt6878.rc:$(TARGET_COPY_OUT_RECOVERY)/root/init.recovery.mt6878.rc
 
-# ION
-$(call soong_config_set_bool,libion,legacy_impl,true)
 
 # Kernel
 $(call inherit-product, device/nothing/Tetris-kernel/kernel.mk)
