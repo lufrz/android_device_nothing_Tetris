@@ -1,5 +1,8 @@
 # LEDs
 type led_device, dev_type;
 
+# Kernel lease for the optional secondary media speaker.
+type tetris_audio_device, dev_type;
+
 # Vibrator
 type aac_richtap_device, dev_type;

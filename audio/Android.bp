@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: Apache-2.0
+cc_library_shared {
+    name: "libtetris_audio_hook",
+    vendor: true,
+    compile_multilib: "64",
+    srcs: ["DownmixHook.cpp", "BessoundProbe.cpp", "DspStereoHook.cpp"],
+    version_script: "hook.map.txt",
+    shared_libs: ["libdl"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    ldflags: ["-Wl,-z,global"],
+}
+
+cc_library_shared {
+    name: "audio.primary.tetris",
+    vendor: true,
+    relative_install_path: "hw",
+    compile_multilib: "64",
+    srcs: ["AudioProxy.cpp", "StereoReceiver.cpp"],
+    header_libs: ["libhardware_headers", "libaudio_system_headers"],
+    shared_libs: ["libbase", "libdl", "liblog", "libtetris_audio_hook", "libtinyalsa"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_test_host {
+    name: "tetris_audio_mode_test",
+    srcs: ["tests/AudioModeTest.cpp"],
+    gtest: false,
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_test_host {
+    name: "tetris_audio_proxy_test",
+    srcs: ["tests/AudioProxyTest.cpp"],
+    gtest: false,
+    header_libs: ["libhardware_headers", "libaudio_system_headers", "libbase_headers", "liblog_headers"],
+    host_ldlibs: ["-ldl"],
+    ldflags: ["-Wl,--wrap=open,--wrap=close,--wrap=ioctl,--wrap=dlopen,--wrap=dlsym"],
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}

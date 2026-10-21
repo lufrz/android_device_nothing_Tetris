@@ -7,6 +7,8 @@ ro.vendor.have_aeev_feature=0
 ro.vendor.usb.kpoc_adb=0
 
 # Audio
+# Select the device proxy; normal playback is delegated to the stock HAL.
+ro.hardware.audio.primary=tetris
 aaudio.mmap_exclusive_policy=2
 aaudio.mmap_policy=2
 audio.deep_buffer.media=true

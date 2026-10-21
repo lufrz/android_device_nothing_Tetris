@@ -1,2 +1,7 @@
 allow hal_audio_default mnt_vendor_file:dir search;
 r_dir_file(hal_audio_default, persist_data_file)
+
+# A single HAL-owned fd controls and releases the secondary media route.
+allow hal_audio_default tetris_audio_device:chr_file { getattr open read write ioctl };
+allowxperm hal_audio_default tetris_audio_device:chr_file ioctl { 0x5400-0x5406 };
+get_prop(hal_audio_default, tetris_parts_audio_prop)

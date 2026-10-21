@@ -1,0 +1,4 @@
+set_prop(tetris_parts_app, tetris_parts_audio_prop)
+
+# Ordinary MODIFY_AUDIO_SETTINGS callers cannot authorize receiver routing.
+neverallow { domain -init -tetris_parts_app } tetris_parts_audio_prop:property_service set;

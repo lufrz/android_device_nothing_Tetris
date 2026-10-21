@@ -1,0 +1,26 @@
+{
+    global:
+        _ZN7android21AudioDspStreamManager16openPlaybackTaskEPNS_28AudioALSAPlaybackHandlerBaseE;
+        _ZN7android21AudioDspStreamManager23CreateAurisysLibManagerEPP21aurisys_lib_manager_tPP20aurisys_dsp_config_thjhjPK18stream_attribute_tS9_S9_PK21aurisys_gain_config_t;
+        _ZN7android21AudioDspStreamManager24DestroyAurisysLibManagerEPP21aurisys_lib_manager_tPP20aurisys_dsp_config_th;
+        audio_send_ipi_msg;
+        tetris_dsp_stereo_initialize;
+        tetris_dsp_stereo_compatible;
+        tetris_dsp_stereo_begin;
+        tetris_dsp_stereo_end;
+        tetris_dsp_stereo_revoke;
+        tetris_dsp_stereo_fault;
+        tetris_dsp_stereo_state;
+        _ZN7android28AudioALSAPlaybackHandlerBase30doStereoToMonoConversionIfNeedEPvm;
+        _ZN7android28AudioALSAPlaybackHandlerBase16wrapSwMixerWriteEPvjS1_;
+        tetris_audio_hook_initialize;
+        tetris_audio_hook_compatible;
+        tetris_audio_hook_bind;
+        tetris_audio_hook_clear;
+        tetris_audio_hook_begin;
+        tetris_audio_hook_end;
+        tetris_audio_hook_stats;
+        audioloud_arsi_process_dl_buf;
+        tetris_bessound_probe_stats;
+    local: *;
+};

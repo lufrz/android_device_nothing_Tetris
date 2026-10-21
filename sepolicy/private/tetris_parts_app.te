@@ -7,6 +7,7 @@ allow tetris_parts_app {
     activity_service
     activity_task_service
     audio_service
+    audioserver_service
     autofill_service
     batteryproperties_service
     clipboard_service

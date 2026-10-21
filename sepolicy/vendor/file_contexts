@@ -1,6 +1,9 @@
 # Camera
 /vendor/bin/hw/vendor\.noth\.hardware\.camera-service    u:object_r:mtk_hal_camera_exec:s0
 
+# Experimental audio
+/dev/tetris_audio    u:object_r:tetris_audio_device:s0
+
 # Fingerprint
 /data/vendor/goodix(/.*)?                                                     u:object_r:vendor_goodix_gf_data_file:s0
 /vendor/bin/hw/android\.hardware\.biometrics\.fingerprint-service\.nothing    u:object_r:hal_fingerprint_default_exec:s0

@@ -52,6 +52,7 @@ PRODUCT_PACKAGES += \
 
 PRODUCT_PACKAGES += \
     audio.primary.default \
+    audio.primary.tetris \
     audio.bluetooth.default \
     audio.r_submix.default \
     audio.usb.default \

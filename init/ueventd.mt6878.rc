@@ -1,3 +1,6 @@
+# Experimental receiver routing is owned only by the audio HAL.
+/dev/tetris_audio                                0600    audioserver    audio
+
 #change partition permission
 # eMMC only
 /dev/block/mmcblk0                               0660    root    system
