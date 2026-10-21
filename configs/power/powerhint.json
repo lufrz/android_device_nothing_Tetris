@@ -90,7 +90,8 @@
       "DefaultIndex": 2,
       "ResetOnInit": true,
       "Comments": [
-        "Reserve GPU headroom during composition without forcing an OPP or sharing GED's APIBOOST limiter."
+        "Loading-based upshift thresholds: 50% during launch, 60% during interaction/rendering, 70% at idle.",
+        "Hints restore the idle margin when released without changing GPU frequency limits."
       ]
     },
     {
@@ -212,6 +213,12 @@
     },
     {
       "PowerHint": "INTERACTION",
+      "Node": "GpuBaseDvfsMargin",
+      "Duration": 0,
+      "Value": "40"
+    },
+    {
+      "PowerHint": "INTERACTION",
       "Node": "UclampFGMin",
       "Duration": 0,
       "Value": "30"
@@ -256,7 +263,7 @@
       "PowerHint": "LAUNCH",
       "Node": "GpuBaseDvfsMargin",
       "Duration": 1500,
-      "Value": "40"
+      "Value": "50"
     },
     {
       "PowerHint": "LAUNCH",
