@@ -144,7 +144,6 @@ on property:sys.boot_completed=1
     # Utilization Clamping
     # Tuning
     write /proc/sys/kernel/sched_util_clamp_min_rt_default 0
-    write /proc/sys/kernel/sched_util_clamp_min 128
 
     # rt
     write /dev/cpuctl/rt/cpu.uclamp.latency_sensitive 1
@@ -180,7 +179,8 @@ on property:sys.boot_completed=1
     write /dev/cpuctl/foreground_window/cpu.shares 10240
 
     # top-app
-    write /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive 1
+    # PowerHAL owns the transient latency and utilization requests.
+    write /dev/cpuctl/top-app/cpu.uclamp.latency_sensitive 0
     write /dev/cpuctl/top-app/cpu.uclamp.max max
     write /dev/cpuctl/top-app/cpu.uclamp.min 0
     write /dev/cpuctl/top-app/cpu.shares 20480
@@ -203,16 +203,21 @@ on property:sys.boot_completed=1
     write /dev/cpuctl/dex2oat/cpu.uclamp.min 0
     write /dev/cpuctl/dex2oat/cpu.shares 512
 
+    # This is the ceiling for UCLAMP_MIN requests, not an idle utilization floor.
+    # Restore the full range after clearing the temporary boot boosts.
+    write /proc/sys/kernel/sched_util_clamp_min 1024
+
     # Enable PowerHAL hint processing
     setprop vendor.powerhal.init 1
 
+# Start display HALs with all CPUs and the transient top-app boosts.
 service vendor.hwcomposer-3-2 /vendor/bin/hw/android.hardware.graphics.composer@3.2-service
     class hal animation
     user system
     group graphics drmrpc
     capabilities SYS_NICE
     onrestart restart surfaceflinger
-    task_profiles ProcessCapacityHigh HighPerformance
+    task_profiles ProcessCapacityMax MaxPerformance
     override
 
 service vendor.gralloc-v2 /vendor/bin/hw/android.hardware.graphics.allocator-V2-service-mediatek
@@ -223,5 +228,5 @@ service vendor.gralloc-v2 /vendor/bin/hw/android.hardware.graphics.allocator-V2-
     onrestart restart surfaceflinger
     onrestart restart vendor.hwcomposer-3-2
     onrestart restart camerahalserver
-    task_profiles ProcessCapacityHigh HighPerformance
+    task_profiles ProcessCapacityMax MaxPerformance
     override

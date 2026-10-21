@@ -434,8 +434,9 @@ ro.vendor.pq.mtk_video_transition=0
 ro.vendor.pref_scale_enable_cfg=1
 
 # Power
-vendor.powerhal.interaction.min=10
-vendor.powerhal.interaction.max=50
+# Keep a touch boost through the animation when display-idle events are unavailable.
+vendor.powerhal.interaction.min=500
+vendor.powerhal.interaction.max=1500
 vendor.powerhal.interaction.offset=0
 
 # Radio

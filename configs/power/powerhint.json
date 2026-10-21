@@ -18,55 +18,6 @@
       ]
     },
     {
-      "Name": "GpuPowerHintFloor",
-      "Path": "/proc/gpufreqv2/limit_table",
-      "Values": [
-        "set 11 -3 0",
-        "set 11 -3 -1"
-      ],
-      "DefaultIndex": 1,
-      "ResetOnInit": true,
-      "Comments": [
-        "PowerHAL APIBOOST limiter 11: request the highest runtime working OPP as a floor, not fixed-frequency mode.",
-        "KEEP_IDX -3 preserves this limiter ceiling; DEFAULT_IDX -1 releases only its floor.",
-        "APIBOOST priority 3 stays below manual DEBUG priority 8 and thermal priority 6; no OPP table size is assumed."
-      ]
-    },
-    {
-      "Name": "CPUEfficiencyClusterMaxFreq",
-      "Path": "/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq",
-      "Values": [
-        "2000000",
-        "1950000",
-        "1900000",
-        "1850000",
-        "1800000",
-        "1750000",
-        "1700000",
-        "1650000",
-        "1600000",
-        "1550000",
-        "1500000",
-        "1450000",
-        "1400000",
-        "1350000",
-        "1300000",
-        "1250000",
-        "1200000",
-        "1150000",
-        "1100000",
-        "1050000",
-        "950000",
-        "850000",
-        "750000",
-        "650000",
-        "550000",
-        "480000"
-      ],
-      "DefaultIndex": 0,
-      "ResetOnInit": true
-    },
-    {
       "Name": "CPUEfficiencyClusterMinFreq",
       "Path": "/sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq",
       "Values": [
@@ -100,36 +51,6 @@
       "ResetOnInit": true
     },
     {
-      "Name": "CPUSuperClusterMaxFreq",
-      "Path": "/sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq",
-      "Values": [
-        "2500000",
-        "2400000",
-        "2300000",
-        "2200000",
-        "2100000",
-        "2000000",
-        "1900000",
-        "1800000",
-        "1700000",
-        "1600000",
-        "1500000",
-        "1400000",
-        "1300000",
-        "1200000",
-        "1100000",
-        "1000000",
-        "900000",
-        "800000",
-        "700000",
-        "600000",
-        "500000",
-        "400000"
-      ],
-      "DefaultIndex": 0,
-      "ResetOnInit": true
-    },
-    {
       "Name": "CPUSuperClusterMinFreq",
       "Path": "/sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq",
       "Values": [
@@ -159,36 +80,30 @@
       "ResetOnInit": true
     },
     {
-      "Name": "CciFreq",
-      "Path": "/sys/kernel/cm_mgr/dbg_cm_mgr",
-      "Values": [
-        "0",
-        "1"
-      ],
-      "DefaultIndex": 0,
-      "ResetOnInit": true
-    },
-    {
       "Name": "GpuBaseDvfsMargin",
       "Path": "/sys/kernel/ged/hal/timer_base_dvfs_margin",
       "Values": [
-        "30",
         "50",
-        "18743356"
+        "40",
+        "30"
       ],
-      "DefaultIndex": 0,
-      "ResetOnInit": true
+      "DefaultIndex": 2,
+      "ResetOnInit": true,
+      "Comments": [
+        "Reserve GPU headroom during composition without forcing an OPP or sharing GED's APIBOOST limiter."
+      ]
     },
     {
       "Name": "GpuBaseDvfsStep",
       "Path": "/sys/kernel/ged/hal/loading_base_dvfs_step",
       "Values": [
-        "103",
-        "16",
-        "771"
+        "259"
       ],
       "DefaultIndex": 0,
-      "ResetOnInit": true
+      "ResetOnInit": true,
+      "Comments": [
+        "Restore the kernel default 0x103: 3 OPP steps up and 1 down. The store parses bare numbers as decimal."
+      ]
     },
     {
       "Name": "PMQoSCpuDmaLatency",
@@ -234,32 +149,37 @@
       "Name": "UclampFGMin",
       "Path": "/dev/cpuctl/foreground/cpu.uclamp.min",
       "Values": [
-        "0",
-        "30"
+        "30",
+        "0"
       ],
-      "DefaultIndex": 0,
+      "DefaultIndex": 1,
       "ResetOnInit": true
     },
     {
       "Name": "UclampTALatency",
       "Path": "/dev/cpuctl/top-app/cpu.uclamp.latency_sensitive",
       "Values": [
-        "0",
-        "1"
+        "1",
+        "0"
       ],
-      "DefaultIndex": 0,
+      "DefaultIndex": 1,
       "ResetOnInit": true
     },
     {
       "Name": "UclampTAMin",
       "Path": "/dev/cpuctl/top-app/cpu.uclamp.min",
       "Values": [
-        "0",
         "60",
-        "100"
+        "40",
+        "30",
+        "0"
       ],
-      "DefaultIndex": 0,
-      "ResetOnInit": true
+      "DefaultIndex": 3,
+      "ResetOnInit": true,
+      "Comments": [
+        "libperfmgr selects the first active value; keep the strongest request first.",
+        "INTERACTION is released by the display-idle handler; its fallback overrides all zero durations with a bounded timeout."
+      ]
     },
     {
       "Name": "PowerHALAudioState",
@@ -275,55 +195,37 @@
     {
       "PowerHint": "INTERACTION",
       "Node": "CPUSuperClusterMinFreq",
-      "Duration": 1500,
+      "Duration": 0,
       "Value": "1700000"
     },
     {
       "PowerHint": "INTERACTION",
-      "Node": "CPUSuperClusterMaxFreq",
-      "Duration": 1500,
-      "Value": "2500000"
-    },
-    {
-      "PowerHint": "INTERACTION",
       "Node": "CPUEfficiencyClusterMinFreq",
-      "Duration": 1500,
+      "Duration": 0,
       "Value": "1500000"
     },
     {
       "PowerHint": "INTERACTION",
-      "Node": "CPUEfficiencyClusterMaxFreq",
-      "Duration": 1500,
-      "Value": "2000000"
-    },
-    {
-      "PowerHint": "INTERACTION",
       "Node": "MemFreq",
-      "Duration": 1500,
+      "Duration": 0,
       "Value": "4266000000"
     },
     {
       "PowerHint": "INTERACTION",
-      "Node": "CciFreq",
-      "Duration": 1500,
-      "Value": "1"
-    },
-    {
-      "PowerHint": "INTERACTION",
       "Node": "UclampFGMin",
-      "Duration": 3000,
+      "Duration": 0,
       "Value": "30"
     },
     {
       "PowerHint": "INTERACTION",
       "Node": "UclampTAMin",
-      "Duration": 5000,
-      "Value": "60"
+      "Duration": 0,
+      "Value": "40"
     },
     {
       "PowerHint": "INTERACTION",
       "Node": "UclampTALatency",
-      "Duration": 5000,
+      "Duration": 0,
       "Value": "1"
     },
     {
@@ -336,13 +238,13 @@
       "PowerHint": "LAUNCH",
       "Node": "CPUSuperClusterMinFreq",
       "Duration": 1500,
-      "Value": "2500000"
+      "Value": "2000000"
     },
     {
       "PowerHint": "LAUNCH",
       "Node": "CPUEfficiencyClusterMinFreq",
       "Duration": 1500,
-      "Value": "2000000"
+      "Value": "1500000"
     },
     {
       "PowerHint": "LAUNCH",
@@ -352,21 +254,9 @@
     },
     {
       "PowerHint": "LAUNCH",
-      "Node": "GpuPowerHintFloor",
-      "Duration": 1500,
-      "Value": "set 11 -3 0"
-    },
-    {
-      "PowerHint": "LAUNCH",
       "Node": "GpuBaseDvfsMargin",
       "Duration": 1500,
-      "Value": "18743356"
-    },
-    {
-      "PowerHint": "LAUNCH",
-      "Node": "GpuBaseDvfsStep",
-      "Duration": 1500,
-      "Value": "771"
+      "Value": "40"
     },
     {
       "PowerHint": "LAUNCH",
@@ -377,14 +267,14 @@
     {
       "PowerHint": "LAUNCH",
       "Node": "UclampTALatency",
-      "Duration": 3000,
-      "Value": "0"
+      "Duration": 1500,
+      "Value": "1"
     },
     {
       "PowerHint": "LAUNCH",
       "Node": "UclampTAMin",
       "Duration": 1500,
-      "Value": "100"
+      "Value": "60"
     },
     {
       "PowerHint": "AUDIO_STREAMING_LOW_LATENCY",
@@ -420,31 +310,19 @@
       "PowerHint": "EXPENSIVE_RENDERING",
       "Node": "CPUSuperClusterMinFreq",
       "Duration": 0,
-      "Value": "2400000"
+      "Value": "1800000"
     },
     {
       "PowerHint": "EXPENSIVE_RENDERING",
       "Node": "CPUEfficiencyClusterMinFreq",
       "Duration": 0,
-      "Value": "1400000"
-    },
-    {
-      "PowerHint": "EXPENSIVE_RENDERING",
-      "Node": "GpuPowerHintFloor",
-      "Duration": 0,
-      "Value": "set 11 -3 0"
+      "Value": "1200000"
     },
     {
       "PowerHint": "EXPENSIVE_RENDERING",
       "Node": "GpuBaseDvfsMargin",
       "Duration": 0,
-      "Value": "50"
-    },
-    {
-      "PowerHint": "EXPENSIVE_RENDERING",
-      "Node": "GpuBaseDvfsStep",
-      "Duration": 0,
-      "Value": "16"
+      "Value": "40"
     },
     {
       "PowerHint": "EXPENSIVE_RENDERING",
@@ -462,7 +340,7 @@
       "PowerHint": "EXPENSIVE_RENDERING",
       "Node": "UclampTAMin",
       "Duration": 0,
-      "Value": "100"
+      "Value": "30"
     },
     {
       "PowerHint": "DOUBLE_TAP_TO_WAKE",
