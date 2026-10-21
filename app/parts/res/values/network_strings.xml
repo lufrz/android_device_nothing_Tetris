@@ -53,7 +53,7 @@
     <string name="network_ss_rsrp">SS-RSRP</string>
     <string name="network_ss_rsrq">SS-RSRQ</string>
     <string name="network_ss_sinr">SS-SINR</string>
-    <string name="network_tcp_help">Choose the default congestion control for new TCP connections. Existing connections and UDP/QUIC are unaffected. Only supported algorithms reported by the running kernel are listed. Performance depends on the connection; no algorithm is always faster. Changes are not saved across restarts.</string>
+    <string name="network_tcp_help">Choose the default congestion control for new TCP connections. Existing connections and UDP/QUIC are unaffected. Only supported algorithms reported by the running kernel are listed. Performance depends on the connection; no algorithm is always faster. Enable Apply on boot to keep your selection after restarting.</string>
     <string name="network_tcp_current">Current algorithm</string>
     <string name="network_tcp_initial">Initial algorithm in this session</string>
     <string name="network_tcp_algorithms">Available algorithms</string>
@@ -62,7 +62,11 @@
     <string name="network_tcp_applied">Last request verified: %1$s.</string>
     <string name="network_tcp_restore">Restore initial algorithm</string>
     <string name="network_tcp_apply_title">Change TCP algorithm?</string>
-    <string name="network_tcp_confirmation">Use %1$s as the default for new TCP connections? Existing connections keep their current algorithm. The change lasts until it is replaced or the phone restarts.</string>
+    <string name="network_tcp_confirmation">Use %1$s as the default for new TCP connections? Existing connections keep their current algorithm. If Apply on boot is enabled, this selection will also be saved for the next restart.</string>
+    <string name="network_tcp_apply_on_boot">Apply on boot</string>
+    <string name="network_tcp_boot_enabled">Restore %1$s after restarting. Changing the algorithm also updates this saved selection.</string>
+    <string name="network_tcp_boot_disabled">Disabled. The next restart uses the system default; the current algorithm is unchanged.</string>
+    <string name="network_tcp_persist_failed">Could not save the boot setting. Check the current algorithm and saved selection.</string>
     <string name="network_apply">Apply</string>
     <string name="network_tcp_unavailable">TCP control is unavailable on this build or the kernel values could not be read.</string>
     <string name="network_tcp_invalid">This algorithm is no longer available. Choose from the updated list.</string>

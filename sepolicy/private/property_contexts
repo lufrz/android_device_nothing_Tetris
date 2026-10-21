@@ -3,6 +3,7 @@ init.svc.thermal_core u:object_r:tetrisparts_thermal_daemon_prop:s0 exact string
 
 # The app requests one fixed init action; it cannot write network sysctls itself.
 sys.tetrisparts.tcp_congestion u:object_r:tetrisparts_tcp_request_prop:s0 exact enum reno cubic bic westwood htcp bbr bbr3
+persist.sys.tetrisparts.tcp_congestion u:object_r:tetrisparts_tcp_request_prop:s0 exact enum off reno cubic bic westwood htcp bbr bbr3
 sys.tetrisparts.tcp_ready u:object_r:tetrisparts_tcp_status_prop:s0 exact bool
 
 persist.sys.tetris.audio_mode u:object_r:tetris_parts_audio_prop:s0 exact enum off dual_mono stereo

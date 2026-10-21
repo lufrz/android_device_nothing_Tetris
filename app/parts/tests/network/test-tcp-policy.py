@@ -41,13 +41,22 @@ require(supported_match is not None, "TCP algorithm allowlist exists")
 supported = re.findall(r'"([a-z0-9_]+)"', supported_match[1])
 require(len(supported) == len(set(supported)), "algorithm allowlist is unique")
 request = "sys.tetrisparts.tcp_congestion"
+saved = "persist.sys.tetrisparts.tcp_congestion"
 ready = "sys.tetrisparts.tcp_ready"
+restore_event = "tetris-parts-tcp-restore"
+ready_event = "tetris-parts-tcp-ready"
 sysctl = "/proc/sys/net/ipv4/tcp_congestion_control"
 request_context = re.search(
     r"^" + re.escape(request) + r"\s+u:object_r:tetrisparts_tcp_request_prop:s0\s+exact enum (.+)$",
     contexts, re.M)
 require(request_context is not None, "request property uses an exact enum context")
-require(set(request_context[1].split()) == set(supported), "property enum matches selector")
+require(set(request_context[1].split()) == set(supported), "request enum matches the selector")
+saved_context = re.search(
+    r"^" + re.escape(saved) + r"\s+u:object_r:tetrisparts_tcp_request_prop:s0\s+exact enum (.+)$",
+    contexts, re.M)
+require(saved_context is not None, "saved selection uses the restricted request property label")
+require(set(saved_context[1].split()) == {"off", *supported},
+        "saved selection allows only off and supported algorithms")
 require(re.search(r"^" + re.escape(ready) +
     r"\s+u:object_r:tetrisparts_tcp_status_prop:s0\s+exact bool$", contexts, re.M),
     "readiness is a separate bool property")
@@ -66,18 +75,34 @@ for raw in rc.splitlines():
         require(trigger is not None and raw[0].isspace(), "init contains only action commands")
         actions[trigger].append(line)
 
-require(actions.pop("property:sys.boot_completed=1", None) == [f"setprop {ready} 1"],
-        "boot advertises readiness without changing TCP")
-require(set(actions) == {f"property:{request}={name}" for name in supported},
-        "init actions match the supported algorithms exactly")
+require(actions.pop("property:sys.boot_completed=1", None) == [
+    f"trigger {restore_event}", f"trigger {ready_event}"],
+    "boot queues restore before a separate readiness event")
+require(actions.pop(ready_event, None) == [f"setprop {ready} 1"],
+        "readiness follows boot restoration")
+live_triggers = {f"property:{request}={name}" for name in supported}
+boot_triggers = {f"{restore_event} && property:{saved}={name}" for name in supported}
+require(set(actions) == live_triggers | boot_triggers,
+        "only fixed live and boot requests can write TCP")
 for name in supported:
     require(actions[f"property:{request}={name}"] == [f"write {sysctl} {name}"],
-            f"{name} writes only one fixed sysctl value")
-require("${" not in rc and "persist." not in rc, "no expanded writes or persisted boot selection")
+            f"{name} writes one fixed value")
+    require(actions[f"{restore_event} && property:{saved}={name}"] == [f"write {sysctl} {name}"],
+            f"{name} restores one fixed saved value")
+require(all("off" not in trigger for trigger in boot_triggers),
+        "off or an absent saved selection leaves the boot default unchanged")
+require(not any(trigger.startswith(f"property:{saved}=") for trigger in actions),
+        "saving or disabling boot persistence cannot replay a live write")
+require("${" not in rc and not re.search(r"^\s*(?:exec|exec_start|start)\b", rc, re.M),
+        "init uses no expanded writes, shell, or external helper")
 require(f'SystemProperties.set("{request}", algorithm)' in session,
         "Android wrapper writes the request property")
 require(f'SystemProperties.get("{ready}") == "1"' in session,
         "Android wrapper checks readiness")
+require('private const val BOOT_ALGORITHM = "persist.sys.tetrisparts.tcp_congestion"' in session
+        and 'SystemProperties.get(BOOT_ALGORITHM, "off")' in session
+        and 'SystemProperties.set(BOOT_ALGORITHM, algorithm)' in session,
+        "Android wrapper uses the persistent selection with an opt-in default")
 require(not re.search(r"writeText|FileOutputStream|Runtime\.getRuntime|ProcessBuilder", session),
         "Android wrapper neither writes proc directly nor invokes a shell")
 

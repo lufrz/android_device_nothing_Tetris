@@ -8,6 +8,8 @@ import java.io.File
 
 /** Keep the initial value and ownership across recreation of the network screen. */
 internal object TcpControlSession {
+.getOrDefault(false)
+
     val manager = TcpControlManager(object : TcpControlPort {
         override fun readCurrent() = File("$SYSCTL/tcp_congestion_control").readText()
         override fun readAvailable() = File("$SYSCTL/tcp_available_congestion_control").readText()
@@ -15,7 +17,12 @@ internal object TcpControlSession {
         override fun request(algorithm: String) {
             SystemProperties.set("sys.tetrisparts.tcp_congestion", algorithm)
         }
+        override fun readBootAlgorithm() = SystemProperties.get(BOOT_ALGORITHM, "off")
+        override fun saveBootAlgorithm(algorithm: String) {
+            SystemProperties.set(BOOT_ALGORITHM, algorithm)
+        }
     })
 
     private const val SYSCTL = "/proc/sys/net/ipv4"
+    private const val BOOT_ALGORITHM = "persist.sys.tetrisparts.tcp_congestion"
 }

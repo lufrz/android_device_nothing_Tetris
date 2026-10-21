@@ -12,14 +12,22 @@ private class Port : TcpControlPort {
     var available = "reno cubic westwood bbr bbr3 custom"
     var ready = true
     var readable = true
+    var bootAlgorithm = "off"
     val writes = mutableListOf<String>()
+    val bootSaves = mutableListOf<String>()
     var action: (String) -> Unit = { current = it }
+    var saveAction: (String) -> Unit = { bootAlgorithm = it }
     override fun readCurrent(): String = if (readable) current else throw IOException("missing")
     override fun readAvailable() = available
     override fun controlReady() = ready
     override fun request(algorithm: String) {
         writes += algorithm
         action(algorithm)
+    }
+    override fun readBootAlgorithm() = bootAlgorithm
+    override fun saveBootAlgorithm(algorithm: String) {
+        bootSaves += algorithm
+        saveAction(algorithm)
     }
 }
 
@@ -47,24 +55,41 @@ fun main() {
         check(!manager.readState().canRestore)
     }
     test("reject unknown, injection, empty, whitespace and runtime-absent selections") {
-        val port = Port()
+        val port = Port().apply { bootAlgorithm = "cubic" }
         val manager = TcpControlManager(port, pause = {})
         val state = manager.readState()
         listOf("custom", "bbr3\nreno", "cubic; reboot", "", " bbr3", "htcp").forEach {
             checkFailure(manager.apply(it, state), TcpFailure.INVALID_ALGORITHM)
         }
-        check(port.writes.isEmpty())
+        check(port.writes.isEmpty() && port.bootSaves.isEmpty())
     }
-    test("missing reader or init integration is unavailable without losing observed initial") {
+    test("missing init integration does not capture initial before readiness") {
         val port = Port().apply { ready = false }
         val manager = TcpControlManager(port, pause = {})
         val state = manager.readState()
-        check(state.current == "cubic" && !state.canApply)
+        check(state.current == "cubic" && state.initial == null && !state.canApply)
         checkFailure(manager.apply("bbr3", state), TcpFailure.UNAVAILABLE)
         port.ready = true
+        check(manager.readState().initial == "cubic")
         port.readable = false
         check(manager.readState().current == null && manager.readState().initial == "cubic")
         check(port.writes.isEmpty())
+    }
+    test("initial is captured after init restores the boot choice and signals readiness") {
+        val port = Port().apply {
+            bootAlgorithm = "bbr3"
+            ready = false
+        }
+        val manager = TcpControlManager(port, pause = {})
+        val waiting = manager.readState()
+        check(waiting.current == "cubic" && waiting.initial == null && !waiting.canApply)
+        port.current = "bbr3"
+        check(manager.readState().initial == null)
+        port.ready = true
+        val ready = manager.readState()
+        check(ready.initial == "bbr3" && ready.current == "bbr3" && ready.canApply)
+        check(!ready.canRestore && ready.bootAlgorithm == "bbr3")
+        check(port.writes.isEmpty() && port.bootSaves.isEmpty())
     }
     test("malformed or empty runtime catalogue disables controls") {
         val port = Port()
@@ -94,12 +119,13 @@ fun main() {
         checkFailure(manager.restoreInitial(manager.readState()), TcpFailure.NOT_OWNED)
     }
     test("stale UI does not overwrite an externally changed value") {
-        val port = Port()
+        val port = Port().apply { bootAlgorithm = "cubic" }
         val manager = TcpControlManager(port, pause = {})
         val stale = manager.readState()
         port.current = "westwood"
         checkFailure(manager.apply("bbr3", stale), TcpFailure.CONFLICT)
         check(port.writes.isEmpty() && port.current == "westwood")
+        check(port.bootSaves.isEmpty() && port.bootAlgorithm == "cubic")
     }
     test("runtime catalogue changes invalidate a queued selection") {
         val port = Port()
@@ -110,20 +136,28 @@ fun main() {
         check(port.writes.isEmpty())
     }
     test("property rejection is reported without claiming success") {
-        val port = Port().apply { action = { throw SecurityException("denied") } }
+        val port = Port().apply {
+            bootAlgorithm = "cubic"
+            action = { throw SecurityException("denied") }
+        }
         val manager = TcpControlManager(port, pause = {})
         val result = manager.apply("bbr3", manager.readState())
         checkFailure(result, TcpFailure.WRITE_FAILED)
         check(result.writeAttempted && result.state.current == "cubic")
+        check(port.bootSaves.isEmpty() && result.state.bootAlgorithm == "cubic")
     }
     test("accepted property without kernel readback times out after one second") {
-        val port = Port().apply { action = {} }
+        val port = Port().apply {
+            bootAlgorithm = "cubic"
+            action = {}
+        }
         var waited = 0L
         val manager = TcpControlManager(port, pause = { waited += it })
         val result = manager.apply("bbr3", manager.readState())
         checkFailure(result, TcpFailure.READBACK_FAILED)
         check(waited == 1000L && port.writes == listOf("bbr3"))
         check(result.state.current == "cubic" && !result.state.canRestore)
+        check(port.bootSaves.isEmpty() && result.state.bootAlgorithm == "cubic")
     }
     test("delayed init succeeds only after actual stable readback") {
         val port = Port().apply { action = {} }
@@ -135,12 +169,13 @@ fun main() {
         check(pauses == 4 && manager.readState().canRestore)
     }
     test("concurrent external change during verification is never rolled back") {
-        val port = Port()
+        val port = Port().apply { bootAlgorithm = "cubic" }
         val manager = TcpControlManager(port, pause = { port.current = "westwood" })
         val result = manager.apply("bbr3", manager.readState())
         checkFailure(result, TcpFailure.CONFLICT)
         check(port.current == "westwood" && port.writes == listOf("bbr3"))
         check(!manager.readState().canRestore)
+        check(port.bootSaves.isEmpty() && result.state.bootAlgorithm == "cubic")
     }
     test("replacement with original value also cancels ownership") {
         val port = Port()
@@ -161,10 +196,113 @@ fun main() {
     test("reading does not write or restore after controller recreation") {
         val port = Port()
         val first = TcpControlManager(port, pause = {})
+        check(first.setApplyOnBoot(true, first.readState()).successful)
         check(first.apply("bbr3", first.readState()).successful)
         val recreated = TcpControlManager(port, pause = {})
-        check(recreated.readState().initial == "bbr3" && !recreated.readState().canRestore)
+        val state = recreated.readState()
+        check(state.initial == "bbr3" && !state.canRestore && state.bootAlgorithm == "bbr3")
+        check(recreated.readState() == state)
         check(port.writes == listOf("bbr3"))
+        check(port.bootSaves == listOf("cubic", "bbr3"))
+    }
+    test("boot persistence is opt-in and runtime changes do not enable it") {
+        listOf("", "off").forEach { stored ->
+            val port = Port().apply { bootAlgorithm = stored }
+            val manager = TcpControlManager(port, pause = {})
+            val state = manager.readState()
+            check(state.bootAlgorithm == null)
+            check(port.writes.isEmpty() && port.bootSaves.isEmpty())
+            val result = manager.apply("bbr3", state)
+            check(result.successful && result.state.bootAlgorithm == null)
+            check(port.current == "bbr3" && port.bootAlgorithm == stored)
+            check(port.writes == listOf("bbr3") && port.bootSaves.isEmpty())
+        }
+    }
+    test("enabling boot persistence captures current without a TCP request") {
+        val port = Port()
+        val manager = TcpControlManager(port, pause = {})
+        check(manager.apply("bbr3", manager.readState()).successful)
+        val result = manager.setApplyOnBoot(true, manager.readState())
+        check(result.successful && !result.writeAttempted)
+        check(result.state.current == "bbr3" && result.state.initial == "cubic")
+        check(result.state.bootAlgorithm == "bbr3" && port.bootAlgorithm == "bbr3")
+        check(port.writes == listOf("bbr3") && port.bootSaves == listOf("bbr3"))
+    }
+    test("disabling boot persistence works when unavailable and leaves current unchanged") {
+        listOf(true, false).forEach { readerAvailable ->
+            val port = Port().apply { bootAlgorithm = "cubic" }
+            val manager = TcpControlManager(port, pause = {})
+            val stale = manager.readState()
+            port.current = "westwood"
+            port.ready = false
+            port.readable = readerAvailable
+            val result = manager.setApplyOnBoot(false, stale)
+            check(result.successful && !result.writeAttempted && !result.state.canApply)
+            check(result.state.current == if (readerAvailable) "westwood" else null)
+            check(result.state.bootAlgorithm == null && port.bootAlgorithm == "off")
+            check(port.current == "westwood" && port.writes.isEmpty())
+            check(port.bootSaves == listOf("off"))
+        }
+    }
+    test("successful applies and restore update an enabled boot preference") {
+        val port = Port()
+        val manager = TcpControlManager(port, pause = {})
+        check(manager.setApplyOnBoot(true, manager.readState()).successful)
+        listOf("bbr3", "westwood").forEach { target ->
+            val result = manager.apply(target, manager.readState())
+            check(result.successful && result.writeAttempted)
+            check(result.state.current == target && result.state.bootAlgorithm == target)
+        }
+        val restored = manager.restoreInitial(manager.readState())
+        check(restored.successful && restored.writeAttempted)
+        check(restored.state.current == "cubic" && restored.state.bootAlgorithm == "cubic")
+        check(!restored.state.canRestore)
+        check(port.writes == listOf("bbr3", "westwood", "cubic"))
+        check(port.bootSaves == listOf("cubic", "bbr3", "westwood", "cubic"))
+    }
+    test("persistence exceptions and readback mismatches retain successful runtime changes") {
+        listOf(true, false).forEach { throws ->
+            val port = Port().apply {
+                bootAlgorithm = "cubic"
+                saveAction = { if (throws) throw SecurityException("denied") }
+            }
+            val manager = TcpControlManager(port, pause = {})
+            val result = manager.apply("bbr3", manager.readState())
+            checkFailure(result, TcpFailure.PERSIST_FAILED)
+            check(result.writeAttempted && result.state.current == "bbr3")
+            check(result.state.canRestore && result.state.bootAlgorithm == "cubic")
+            check(port.current == "bbr3" && port.bootAlgorithm == "cubic")
+            check(port.writes == listOf("bbr3") && port.bootSaves == listOf("bbr3"))
+        }
+    }
+    test("enabling boot persistence rejects stale current and catalogue without saving") {
+        listOf(true, false).forEach { changeCurrent ->
+            val port = Port()
+            val manager = TcpControlManager(port, pause = {})
+            val stale = manager.readState()
+            if (changeCurrent) port.current = "westwood" else port.available += " htcp"
+            val result = manager.setApplyOnBoot(true, stale)
+            checkFailure(result, TcpFailure.CONFLICT)
+            check(!result.writeAttempted && result.state.bootAlgorithm == null)
+            check(port.writes.isEmpty() && port.bootSaves.isEmpty())
+        }
+    }
+    test("enabling boot persistence rejects unsupported or runtime-absent current values") {
+        listOf("custom", "htcp").forEach { current ->
+            val port = Port().apply { this.current = current }
+            val manager = TcpControlManager(port, pause = {})
+            val state = manager.readState()
+            check(state.canApply)
+            checkFailure(manager.setApplyOnBoot(true, state), TcpFailure.INVALID_ALGORITHM)
+            check(port.current == current && port.bootAlgorithm == "off")
+            check(port.writes.isEmpty() && port.bootSaves.isEmpty())
+        }
+    }
+    test("enabling boot persistence requires available kernel control") {
+        val port = Port().apply { ready = false }
+        val manager = TcpControlManager(port, pause = {})
+        checkFailure(manager.setApplyOnBoot(true, manager.readState()), TcpFailure.UNAVAILABLE)
+        check(port.writes.isEmpty() && port.bootSaves.isEmpty())
     }
     test("concurrent callers serialize and the stale second caller cannot overwrite") {
         val port = Port()

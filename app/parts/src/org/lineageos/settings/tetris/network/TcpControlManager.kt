@@ -5,6 +5,7 @@ package org.lineageos.settings.tetris.network
 
 internal enum class TcpFailure {
     UNAVAILABLE, INVALID_ALGORITHM, CONFLICT, WRITE_FAILED, READBACK_FAILED, NOT_OWNED,
+    PERSIST_FAILED,
 }
 
 internal data class TcpState(
@@ -14,6 +15,7 @@ internal data class TcpState(
     val canApply: Boolean,
     val canRestore: Boolean,
     val unavailableReason: TcpFailure?,
+    val bootAlgorithm: String? = null,
 )
 
 internal data class TcpResult(
@@ -30,10 +32,12 @@ internal interface TcpControlPort {
     fun readAvailable(): String
     fun controlReady(): Boolean
     fun request(algorithm: String)
+    fun readBootAlgorithm(): String
+    fun saveBootAlgorithm(algorithm: String)
 }
 
 /**
- * Changes the default for new TCP sockets. No boot persistence, module loading, or qdisc writes.
+ * Changes the default for new TCP sockets. Boot restoration is opt-in and handled by init.
  * Call on a worker thread: init applies requests asynchronously, so success requires readback.
  */
 internal class TcpControlManager(
@@ -50,7 +54,7 @@ internal class TcpControlManager(
         if (target !in SUPPORTED || target !in before.available) {
             return TcpResult(before, TcpFailure.INVALID_ALGORITHM)
         }
-        return applyChecked(target, expected, before)
+        return rememberSelection(applyChecked(target, expected, before))
     }
 
     @Synchronized fun restoreInitial(expected: TcpState): TcpResult {
@@ -59,7 +63,36 @@ internal class TcpControlManager(
             return TcpResult(before, TcpFailure.CONFLICT)
         }
         if (!before.canRestore) return TcpResult(before, TcpFailure.NOT_OWNED)
-        return applyChecked(checkNotNull(initial), expected, before)
+        return rememberSelection(applyChecked(checkNotNull(initial), expected, before))
+    }
+
+    @Synchronized fun setApplyOnBoot(enabled: Boolean, expected: TcpState): TcpResult {
+        val before = snapshot()
+        // Disabling persistence must remain possible even if kernel control is unavailable.
+        if (!enabled) return saveBootSelection("off", TcpResult(before))
+        if (!before.canApply) return TcpResult(before, TcpFailure.UNAVAILABLE)
+        if (before.current != expected.current || before.available != expected.available) {
+            return TcpResult(before, TcpFailure.CONFLICT)
+        }
+        val target = before.current
+        if (target == null || target !in before.available) {
+            return TcpResult(before, TcpFailure.INVALID_ALGORITHM)
+        }
+        return saveBootSelection(target, TcpResult(before))
+    }
+
+    private fun rememberSelection(result: TcpResult): TcpResult {
+        if (!result.successful || result.state.bootAlgorithm == null) return result
+        val target = checkNotNull(result.state.current)
+        return if (target == result.state.bootAlgorithm) result else saveBootSelection(target, result)
+    }
+
+    private fun saveBootSelection(target: String, result: TcpResult): TcpResult {
+        val saved = runCatching {
+            port.saveBootAlgorithm(target)
+            port.readBootAlgorithm() == target
+        }.getOrDefault(false)
+        return result.copy(state = snapshot(), failure = if (saved) null else TcpFailure.PERSIST_FAILED)
     }
 
     private fun applyChecked(target: String, expected: TcpState, before: TcpState): TcpResult {
@@ -120,6 +153,8 @@ internal class TcpControlManager(
     }
 
     private fun snapshot(): TcpState {
+        // Observe readiness before reading the value restored by init during boot.
+        val ready = runCatching { port.controlReady() }.getOrDefault(false)
         val current = runCatching { port.readCurrent().trim() }
             .getOrNull()?.takeIf { NAME.matches(it) }
         val rawAvailable = runCatching { port.readAvailable().trim() }.getOrNull()
@@ -127,12 +162,13 @@ internal class TcpControlManager(
             ?.split(Regex("\\s+"))?.takeIf { values ->
                 values.isNotEmpty() && values.all { NAME.matches(it) }
             }?.toSet()?.let { values -> SUPPORTED.filter { it in values } }.orEmpty()
-        val ready = runCatching { port.controlReady() }.getOrDefault(false)
-        if (initial == null && current != null) initial = current
+        val bootAlgorithm = runCatching { port.readBootAlgorithm() }.getOrNull()
+            ?.takeIf { it in SUPPORTED }
+        if (initial == null && ready && current != null) initial = current
         if (owned != null && current != owned) owned = null
         val applicable = current != null && available.isNotEmpty() && ready
         val state = TcpState(current, available, initial, applicable, false,
-            if (applicable) null else TcpFailure.UNAVAILABLE)
+            if (applicable) null else TcpFailure.UNAVAILABLE, bootAlgorithm)
         return state.copy(canRestore = canRestore(state))
     }
 

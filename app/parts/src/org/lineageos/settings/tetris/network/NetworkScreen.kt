@@ -50,6 +50,7 @@ import org.lineageos.settings.tetris.ui.PartsInfoCard
 import org.lineageos.settings.tetris.ui.PartsPreference
 import org.lineageos.settings.tetris.ui.PartsPreferenceGroup
 import org.lineageos.settings.tetris.ui.PartsScaffold
+import org.lineageos.settings.tetris.ui.PartsSwitchPreference
 import org.lineageos.settings.tetris.ui.rememberPartsResumed
 
 private data class TcpConfirmation(val expected: TcpState, val target: String, val restore: Boolean)
@@ -101,7 +102,7 @@ fun NetworkScreen(onBack: () -> Unit) {
         }
     }
 
-    fun apply(change: TcpConfirmation) {
+    fun runChange(showApplied: Boolean = true, operation: () -> TcpResult) {
         if (!resumed || busy) return
         confirmation = null
         busy = true
@@ -109,12 +110,9 @@ fun NetworkScreen(onBack: () -> Unit) {
         operationFailed = false
         scope.launch {
             try {
-                val applied = withContext(Dispatchers.IO) {
-                    if (change.restore) TcpControlSession.manager.restoreInitial(change.expected)
-                    else TcpControlSession.manager.apply(change.target, change.expected)
-                }
+                val applied = withContext(Dispatchers.IO) { operation() }
                 tcp = applied.state
-                result = applied
+                result = applied.takeIf { showApplied || !it.successful }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -203,6 +201,25 @@ fun NetworkScreen(onBack: () -> Unit) {
                             PartsInfoCard(body = stringResource(R.string.network_tcp_unavailable))
                         }
                         val state = tcp
+                        item("tcp_boot") {
+                            PartsPreferenceGroup {
+                                PartsSwitchPreference(
+                                    title = stringResource(R.string.network_tcp_apply_on_boot),
+                                    summary = state?.bootAlgorithm?.let {
+                                        stringResource(R.string.network_tcp_boot_enabled, algorithmName(it))
+                                    } ?: stringResource(R.string.network_tcp_boot_disabled),
+                                    checked = state?.bootAlgorithm != null,
+                                    enabled = resumed && !busy && state != null &&
+                                        (state.bootAlgorithm != null ||
+                                            (state.canApply && state.current in state.available)),
+                                    onCheckedChange = { enabled ->
+                                        if (state != null) runChange(showApplied = false) {
+                                            TcpControlSession.manager.setApplyOnBoot(enabled, state)
+                                        }
+                                    },
+                                )
+                            }
+                        }
                         if (state == null || !state.canApply) item("tcp_unavailable") {
                             PartsInfoCard(body = stringResource(if (state == null && !operationFailed)
                                 R.string.network_loading else R.string.network_tcp_unavailable))
@@ -245,7 +262,12 @@ fun NetworkScreen(onBack: () -> Unit) {
             title = { Text(stringResource(if (change.restore) R.string.network_tcp_restore else R.string.network_tcp_apply_title)) },
             text = { Text(stringResource(R.string.network_tcp_confirmation, algorithmName(change.target))) },
             confirmButton = {
-                TextButton(enabled = resumed && !busy, onClick = { apply(change) }) {
+                TextButton(enabled = resumed && !busy, onClick = {
+                    runChange {
+                        if (change.restore) TcpControlSession.manager.restoreInitial(change.expected)
+                        else TcpControlSession.manager.apply(change.target, change.expected)
+                    }
+                }) {
                     Text(stringResource(R.string.network_apply))
                 }
             },
@@ -352,5 +374,6 @@ private fun tcpFailureString(failure: TcpFailure?): Int = when (failure) {
     TcpFailure.WRITE_FAILED -> R.string.network_tcp_write_failed
     TcpFailure.READBACK_FAILED -> R.string.network_tcp_readback_failed
     TcpFailure.NOT_OWNED -> R.string.network_tcp_not_owned
+    TcpFailure.PERSIST_FAILED -> R.string.network_tcp_persist_failed
     else -> R.string.network_tcp_unavailable
 }
