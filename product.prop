@@ -1,9 +1,6 @@
 # Audio
 ro.audio.monitorRotation=true
 
-# Camera
-ro.camerax.extensions.enabled=true
-
 # Bluetooth
 bluetooth.profile.a2dp.source.enabled=true
 bluetooth.profile.asha.central.enabled=true
