@@ -300,8 +300,9 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.telephony.ims.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.telephony.ims.xml
 
 # Security
+# Verified separately against Tetris_B4.1-260615-1652 AVB descriptors.
 BOOT_SECURITY_PATCH := 2026-04-05
-INIT_BOOT_SECURITY_PATCH := $(BOOT_SECURITY_PATCH)
+INIT_BOOT_SECURITY_PATCH := 2026-04-05
 VENDOR_SECURITY_PATCH := 2026-04-05
 
 # Setup dalvik vm configs
