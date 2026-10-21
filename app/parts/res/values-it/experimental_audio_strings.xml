@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <string name="experimental_audio_title">Funzioni sperimentali</string>
+    <string name="experimental_audio_home_summary">Audio sperimentale con due altoparlanti</string>
+    <string name="experimental_audio_group">Audio</string>
+    <string name="experimental_audio_dual_speaker_title">Audio con due altoparlanti</string>
+    <string name="experimental_audio_dual_speaker_summary">Usa la capsula auricolare superiore insieme all’altoparlante inferiore per la riproduzione multimediale.</string>
+    <string name="experimental_audio_stereo_title">Canali stereo</string>
+    <string name="experimental_audio_stereo_summary">Richiedi il canale sinistro dalla capsula superiore e il canale destro dall’altoparlante inferiore.</string>
+    <string name="experimental_audio_status_title">Stato</string>
+    <string name="experimental_audio_mode_off">Disattivato</string>
+    <string name="experimental_audio_mode_dual_mono">Doppio mono selezionato</string>
+    <string name="experimental_audio_mode_stereo">Stereo selezionato</string>
+    <string name="experimental_audio_applying">Applicazione delle impostazioni audio…</string>
+    <string name="experimental_audio_gain_title">Guadagno codec della capsula superiore</string>
+    <string name="experimental_audio_gain_value">%1$+d dB</string>
+    <string name="experimental_audio_gain_reset">Ripristina 0 dB</string>
+    <string name="experimental_audio_gain_summary">Regola il codec della capsula superiore durante l’audio sperimentale multimediale, fino a +6 dB. È separato dal guadagno software. Il valore viene mantenuto dopo il riavvio.</string>
+    <string name="experimental_audio_output_title">Altoparlanti per la riproduzione</string>
+    <string name="experimental_audio_output_both">Entrambi gli altoparlanti</string>
+    <string name="experimental_audio_output_upper">Solo capsula superiore</string>
+    <string name="experimental_audio_output_lower">Solo altoparlante inferiore</string>
+    <string name="experimental_audio_output_both_summary">Usa la modalità stereo o doppio mono selezionata.</string>
+    <string name="experimental_audio_output_single_summary">Combina i canali sinistro e destro per sentirli entrambi.</string>
+    <string name="experimental_audio_output_upper_active">Riproduzione attiva solo sulla capsula superiore.</string>
+    <string name="experimental_audio_output_lower_active">Riproduzione attiva solo sull’altoparlante inferiore.</string>
+    <string name="experimental_audio_software_gain_title">Guadagno software della capsula superiore</string>
+    <string name="experimental_audio_software_gain_summary">Amplifica solo il segnale multimediale della capsula superiore. Disponibile selezionando stereo o la capsula superiore; non si applica al doppio mono su entrambi gli altoparlanti né alle chiamate. Il valore viene mantenuto dopo il riavvio. Un guadagno positivo può aumentare la distorsione.</string>
+    <string name="experimental_audio_sync_trim_title">Sincronismo della capsula superiore</string>
+    <string name="experimental_audio_sync_trim_value">%1$+d ms</string>
+    <string name="experimental_audio_sync_trim_reset">Ripristina 0 ms</string>
+    <string name="experimental_audio_sync_trim_summary">Regolazione fine rispetto alla calibrazione: i valori negativi anticipano la capsula superiore, quelli positivi la ritardano. Disponibile con entrambi gli altoparlanti in stereo. Metti in pausa e riprendi la riproduzione per applicare. Il valore viene mantenuto dopo il riavvio.</string>
+    <string name="experimental_audio_unavailable">Il controllo dei due altoparlanti non è disponibile in questa build.</string>
+    <string name="experimental_audio_stereo_unavailable">Il percorso audio stereo non è disponibile in questa build.</string>
+    <string name="experimental_audio_stereo_requires_dual">Attiva l’audio con due altoparlanti per selezionare i canali stereo.</string>
+    <string name="experimental_audio_help">Questi controlli sperimentali si applicano alla riproduzione multimediale. Le preferenze vengono mantenute dopo il riavvio. Un solo altoparlante riproduce un mix di entrambi i canali; selezionandoli entrambi, Canali stereo sceglie fra stereo e doppio mono. Gli altoparlanti hanno volume e timbro diversi. Metti in pausa e riprendi dopo aver regolato il sincronismo.</string>
+    <string name="experimental_audio_stereo_unverified">Impossibile verificare il percorso stereo per questa riproduzione. L’uscita aggiuntiva è sospesa.</string>
+    <string name="experimental_audio_rejected">Impossibile applicare le impostazioni audio. I controlli mostrano gli ultimi valori rilevati.</string>
+    <string name="experimental_audio_stereo_active">Stereo sperimentale attivo.</string>
+    <string name="experimental_audio_dual_active">Doppio mono attivo.</string>
+    <string name="experimental_audio_paused_call">Sospeso durante una chiamata o una comunicazione audio.</string>
+    <string name="experimental_audio_paused_route">Sospeso mentre è in uso un’altra uscita audio.</string>
+    <string name="experimental_audio_gain_error">Impossibile applicare il guadagno della capsula superiore. L’uscita secondaria è disattivata.</string>
+    <string name="experimental_audio_waiting">In attesa di una riproduzione multimediale compatibile sugli altoparlanti integrati.</string>
+    <string name="experimental_audio_paused">La modalità selezionata è momentaneamente sospesa.</string>
+    <string name="experimental_audio_kernel_missing">Questo kernel non supporta i controlli sperimentali della capsula.</string>
+    <string name="experimental_audio_calibration_missing">Il limite del livello della capsula non è disponibile. L’audio con due altoparlanti resta disattivato.</string>
+    <string name="experimental_audio_recovery_required">Il ripristino audio non è riuscito. Riavvia il telefono prima di usare nuovamente le funzioni audio sperimentali.</string>
+    <string name="experimental_audio_sync_waiting">In attesa della sincronizzazione dei due altoparlanti.</string>
+    <string name="experimental_audio_sync_error">La riproduzione stereo ha perso la sincronizzazione. La capsula superiore è sospesa; riavvia la riproduzione per riprovare.</string>
+    <string name="experimental_audio_receiver_unavailable">Impossibile aprire l’uscita separata della capsula superiore. Lo stereo è sospeso.</string>
+    <string name="experimental_audio_stereo_format">Lo stereo non è disponibile per questo formato di riproduzione. La capsula superiore è sospesa.</string>
+</resources>

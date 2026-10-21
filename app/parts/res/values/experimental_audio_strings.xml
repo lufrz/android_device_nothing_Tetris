@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <string name="experimental_audio_title">Experimental features</string>
+    <string name="experimental_audio_home_summary">Experimental dual-speaker audio</string>
+    <string name="experimental_audio_group">Audio</string>
+    <string name="experimental_audio_dual_speaker_title">Dual-speaker audio</string>
+    <string name="experimental_audio_dual_speaker_summary">Use the upper earpiece together with the bottom speaker for media playback.</string>
+    <string name="experimental_audio_stereo_title">Stereo channels</string>
+    <string name="experimental_audio_stereo_summary">Request the left channel from the upper earpiece and the right channel from the bottom speaker.</string>
+    <string name="experimental_audio_status_title">Status</string>
+    <string name="experimental_audio_mode_off">Off</string>
+    <string name="experimental_audio_mode_dual_mono">Dual mono selected</string>
+    <string name="experimental_audio_mode_stereo">Stereo selected</string>
+    <string name="experimental_audio_applying">Applying audio settings…</string>
+    <string name="experimental_audio_gain_title">Upper earpiece codec gain</string>
+    <string name="experimental_audio_gain_value">%1$+d dB</string>
+    <string name="experimental_audio_gain_reset">Reset to 0 dB</string>
+    <string name="experimental_audio_gain_summary">Adjusts the upper earpiece codec during experimental media playback, up to +6 dB. Separate from software gain. Saved after restarting.</string>
+    <string name="experimental_audio_output_title">Playback speakers</string>
+    <string name="experimental_audio_output_both">Both speakers</string>
+    <string name="experimental_audio_output_upper">Upper earpiece only</string>
+    <string name="experimental_audio_output_lower">Bottom speaker only</string>
+    <string name="experimental_audio_output_both_summary">Uses the selected stereo or dual mono mode.</string>
+    <string name="experimental_audio_output_single_summary">Combines left and right channels so both remain audible.</string>
+    <string name="experimental_audio_output_upper_active">Playback is active on the upper earpiece only.</string>
+    <string name="experimental_audio_output_lower_active">Playback is active on the bottom speaker only.</string>
+    <string name="experimental_audio_software_gain_title">Upper earpiece software gain</string>
+    <string name="experimental_audio_software_gain_summary">Boosts only the upper earpiece media signal. Available with stereo or the upper earpiece selected; not applied to dual mono on both speakers or calls. Saved after restarting. Positive gain may increase distortion.</string>
+    <string name="experimental_audio_sync_trim_title">Upper earpiece timing</string>
+    <string name="experimental_audio_sync_trim_value">%1$+d ms</string>
+    <string name="experimental_audio_sync_trim_reset">Reset to 0 ms</string>
+    <string name="experimental_audio_sync_trim_summary">Fine adjustment relative to the calibrated timing: negative values advance the upper earpiece, positive values delay it. Available with both speakers in stereo. Pause and resume playback to apply. Saved after restarting.</string>
+    <string name="experimental_audio_unavailable">Dual-speaker control is unavailable on this build.</string>
+    <string name="experimental_audio_stereo_unavailable">Stereo routing is unavailable on this build.</string>
+    <string name="experimental_audio_stereo_requires_dual">Enable dual-speaker audio to select stereo channels.</string>
+    <string name="experimental_audio_help">These experimental controls apply to media playback. Preferences are kept after restarting. A single selected speaker plays a mix of both channels; with both speakers selected, Stereo channels chooses stereo or dual mono. The speakers differ in volume and tone. Pause and resume playback after changing the timing adjustment.</string>
+    <string name="experimental_audio_stereo_unverified">The stereo path could not be verified for this playback. The secondary output is suspended.</string>
+    <string name="experimental_audio_rejected">The audio settings could not be applied. The controls show the last reported values.</string>
+    <string name="experimental_audio_stereo_active">Experimental stereo is active.</string>
+    <string name="experimental_audio_dual_active">Dual mono is active.</string>
+    <string name="experimental_audio_paused_call">Paused for a call or communication audio.</string>
+    <string name="experimental_audio_paused_route">Paused while another audio output is in use.</string>
+    <string name="experimental_audio_gain_error">The upper earpiece gain could not be applied. The secondary output is disabled.</string>
+    <string name="experimental_audio_waiting">Waiting for compatible media playback on the built-in speakers.</string>
+    <string name="experimental_audio_paused">The selected mode is currently suspended.</string>
+    <string name="experimental_audio_kernel_missing">This kernel does not support the experimental receiver controls.</string>
+    <string name="experimental_audio_calibration_missing">The receiver level limit is unavailable. Dual-speaker audio remains disabled.</string>
+    <string name="experimental_audio_recovery_required">Audio restoration failed. Restart the phone before using experimental audio again.</string>
+    <string name="experimental_audio_sync_waiting">Waiting for the two speakers to synchronize.</string>
+    <string name="experimental_audio_sync_error">Stereo playback lost synchronization. The upper earpiece is suspended; restart playback to retry.</string>
+    <string name="experimental_audio_receiver_unavailable">The separate output for the upper earpiece could not be opened. Stereo is suspended.</string>
+    <string name="experimental_audio_stereo_format">Stereo is unavailable for this playback format. The upper earpiece is suspended.</string>
+</resources>

@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import com.google.android.material.color.DynamicColors
 import org.lineageos.settings.tetris.adaptive.AdaptiveScreen
 import org.lineageos.settings.tetris.adaptive.AdaptiveService
+import org.lineageos.settings.tetris.audio.ExperimentalAudioPage
 import org.lineageos.settings.tetris.battery.BatteryScreen
 import org.lineageos.settings.tetris.cpu.CpuScreen
 import org.lineageos.settings.tetris.consent.TermsActivity
@@ -106,6 +107,7 @@ class PartsActivity : ComponentActivity() {
  */
 class PartsSubActivity : ComponentActivity() {
     private var page: PartsPage? = null
+    private var pageLaunchPending = false
     private var proposalToReview by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -127,6 +129,11 @@ class PartsSubActivity : ComponentActivity() {
         setContent {
             TetrisPartsTheme {
                 when (destination) {
+                    PartsPage.EXPERIMENTAL -> ExperimentalScreen(
+                        onBack = ::finish,
+                        onAudio = ::openAudio,
+                    )
+                    PartsPage.AUDIO -> ExperimentalAudioPage(::finish)
                     PartsPage.NETWORK -> NetworkScreen(::finish)
                     PartsPage.CPU -> CpuScreen(::finish)
                     PartsPage.GPU -> GpuScreen(::finish)
@@ -146,6 +153,16 @@ class PartsSubActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (!isFinishing && !requireConsent()) return
+        pageLaunchPending = false
+    }
+
+    private fun openAudio() {
+        if (!requireConsent()) return
+        if (pageLaunchPending) return
+        pageLaunchPending = true
+        startActivity(Intent(this, PartsSubActivity::class.java).apply {
+            putExtra(EXTRA_PAGE, PartsPage.AUDIO.route)
+        })
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -171,7 +188,8 @@ private fun ComponentActivity.requireDeviceOwner(): Boolean {
 
 private enum class PartsPage(val route: String) {
     CPU("cpu"), GPU("gpu"), MEMORY("memory"), BATTERY("battery"),
-    TEMPERATURE("temperature"), ADAPTIVE("adaptive"), NETWORK("network");
+    TEMPERATURE("temperature"), ADAPTIVE("adaptive"), NETWORK("network"),
+    EXPERIMENTAL("experimental"), AUDIO("audio");
 
     companion object {
         fun fromRoute(route: String?): PartsPage? = entries.firstOrNull { it.route == route }

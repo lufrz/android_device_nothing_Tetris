@@ -12,4 +12,8 @@ object ScreenProbe {
     fun showPage(name: String, onBack: () -> Unit) { page = name; back = onBack }
 }
 fun PartsHomeScreen(onNavigate: (String) -> Unit) { ScreenProbe.page = "home"; ScreenProbe.navigate = onNavigate }
+fun ExperimentalScreen(onBack: () -> Unit, onAudio: () -> Unit) {
+    ScreenProbe.showPage("experimental", onBack)
+    ScreenProbe.navigate = { if (it == "audio") onAudio() }
+}
 object R { object string { const val parts_owner_only = 1 } }

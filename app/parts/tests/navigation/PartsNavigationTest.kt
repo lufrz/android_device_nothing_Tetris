@@ -13,7 +13,7 @@ import org.lineageos.settings.tetris.consent.TermsActivity
 private const val PAGE = "org.lineageos.settings.tetris.PAGE"
 private const val PENDING_REVIEW = "pending_review"
 private val proposalKey = AdaptiveService.EXTRA_PROPOSAL_ID
-private val pages = listOf("cpu", "gpu", "memory", "battery", "temperature", "adaptive", "network")
+private val pages = listOf("cpu", "gpu", "memory", "battery", "temperature", "adaptive", "network", "experimental", "audio")
 private var cases = 0
 
 private fun test(name: String, body: () -> Unit) {
@@ -228,6 +228,24 @@ fun main() {
         navigate("gpu")
         expect(activity.launched.size == 2, "Launch guard did not reset for the next visit")
         assertInternalPage(activity.launched[1], "gpu")
+    }
+    test("Experimental opens Audio once and retains the parent Activity") {
+        val parent = child("experimental")
+        val navigate = ScreenProbe.navigate!!
+        navigate("audio"); navigate("audio")
+        assertInternalPage(parent.onlyLaunch(), "audio")
+        expect(parent.finishCount == 0, "Audio replaced its parent")
+        val audio = child("audio")
+        ScreenProbe.back!!()
+        expect(audio.finishCount == 1 && parent.finishCount == 0, "Audio back finished its parent")
+        parent.performResume(); parent.render()
+        ScreenProbe.navigate!!("audio")
+        expect(parent.launched.size == 2, "Returning to Experimental did not reset the launch guard")
+    }
+    test("Audio recreation restores the submenu without opening another Activity") {
+        val first = child("audio")
+        val restored = child("experimental", saved = first.performSave())
+        expect(ScreenProbe.page == "audio" && restored.launched.isEmpty(), "Audio recreation lost its route")
     }
     test("Home tap guard never drops an incoming notification") {
         val activity = home()

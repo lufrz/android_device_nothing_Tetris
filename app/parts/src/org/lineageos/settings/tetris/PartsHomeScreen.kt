@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -100,6 +101,16 @@ fun PartsHomeScreen(onNavigate: (String) -> Unit) {
                         summary = stringResource(R.string.parts_battery_summary),
                         icon = Icons.Filled.BatteryChargingFull,
                         onClick = { onNavigate("battery") },
+                    )
+                }
+            }
+            item("experimental") {
+                PartsPreferenceGroup {
+                    PartsPreference(
+                        title = stringResource(R.string.experimental_audio_title),
+                        summary = stringResource(R.string.experimental_audio_home_summary),
+                        icon = Icons.Filled.Science,
+                        onClick = { onNavigate("experimental") },
                     )
                 }
             }
