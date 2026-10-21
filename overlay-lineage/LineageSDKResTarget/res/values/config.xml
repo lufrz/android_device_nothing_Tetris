@@ -19,4 +19,8 @@
          value. If this is the case, set this config to true to let the toggle provider always set
          charging enabled status regardless of the current status. -->
     <bool name="config_chargingControlToggleSetAlways">true</bool>
+
+    <!-- Stopping charge also disables the input power path. Resume charging one
+         percentage point below the selected limit as the battery discharges. -->
+    <integer name="config_chargingControlBatteryRechargeMargin">1</integer>
 </resources>
