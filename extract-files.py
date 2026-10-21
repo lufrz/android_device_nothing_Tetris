@@ -101,7 +101,8 @@ blob_fixups: blob_fixups_user_type = {
         .binary_regex_replace(b'A2dpsuspendonly', b'A2dpSuspended\x00\x00')
         .binary_regex_replace(b'BTAudiosuspend', b'A2dpSuspended\x00'),
     'vendor/lib64/hw/hwcomposer.mtk_common.so': blob_fixup()
-        .add_needed('libprocessgroup_shim.so'),
+        .add_needed('libprocessgroup_shim.so')
+        .replace_needed('vendor.mediatek.hardware.pq_aidl-V4-ndk.so', 'vendor.mediatek.hardware.pq_aidl-V7-ndk.so'),
     'vendor/bin/mnld': blob_fixup()
         .replace_needed('libmnl.so', 'libmnl_mtk.so'),
     'vendor/lib64/hw/sensors.mediatek.V2.0.so': blob_fixup()
@@ -146,7 +147,8 @@ blob_fixups: blob_fixups_user_type = {
     ): blob_fixup()
         .add_needed('libprocessgroup_shim.so'),
     'vendor/lib64/libntcamcore.so': blob_fixup()
-        .remove_needed('libntcamextened.so'),
+        .remove_needed('libntcamextened.so')
+        .replace_needed('android.hardware.graphics.allocator-V1-ndk.so', 'android.hardware.graphics.allocator-V2-ndk.so'),
     (
         'vendor/bin/hw/mt6878/android.hardware.graphics.allocator-V2-service-mediatek.mt6878',
         'vendor/lib64/egl/mt6878/libGLES_mali.so',
@@ -155,11 +157,6 @@ blob_fixups: blob_fixups_user_type = {
         'vendor/lib64/hw/mt6878/mapper.mediatek.so',
         'vendor/lib64/libaimemc.so',
         'vendor/lib64/libcodec2_fsr.so',
-        'vendor/lib64/libcodec2_vpp_AIMEMC_plugin.so',
-        'vendor/lib64/libcodec2_vpp_AISR_plugin.so',
-        'vendor/lib64/libmtkcam_grallocutils.so',
-        'vendor/lib64/mt6878/libmtkcam_grallocutils.so',
-        'vendor/lib64/libmtkcam_grallocutils_aidlv1helper.so',
         'vendor/lib64/vendor.mediatek.hardware.camera.isphal-V1-ndk.so',
         'vendor/lib64/vendor.mediatek.hardware.pq_aidl-V2-ndk.so',
         'vendor/lib64/vendor.mediatek.hardware.pq_aidl-V4-ndk.so',
@@ -170,16 +167,14 @@ blob_fixups: blob_fixups_user_type = {
         'vendor/lib64/libmtkcam_grallocutils.so',
         'vendor/lib64/mt6878/libmtkcam_grallocutils.so',
         'vendor/lib64/libmtkcam_grallocutils_aidlv1helper.so',
-        'vendor/lib64/libntcamcore.so',
     ): blob_fixup()
+        .replace_needed('android.hardware.graphics.common-V4-ndk.so', 'android.hardware.graphics.common-V7-ndk.so')
         .replace_needed('android.hardware.graphics.allocator-V1-ndk.so', 'android.hardware.graphics.allocator-V2-ndk.so'),
     (
         'vendor/lib64/mt6878/libdpframework.so',
         'vendor/lib64/libpqsharememory.so',
     ): blob_fixup()
         .replace_needed('vendor.mediatek.hardware.pq_aidl-V2-ndk.so', 'vendor.mediatek.hardware.pq_aidl-V7-ndk.so'),
-    'vendor/lib64/hw/hwcomposer.mtk_common.so': blob_fixup()
-        .replace_needed('vendor.mediatek.hardware.pq_aidl-V4-ndk.so', 'vendor.mediatek.hardware.pq_aidl-V7-ndk.so'),
     'vendor/lib64/mt6878/libpqconfig.so': blob_fixup()
         .replace_needed('android.hardware.sensors-V2-ndk.so', 'android.hardware.sensors-V3-ndk.so'),
     'vendor/lib64/vendor.mediatek.hardware.bluetooth.audio-V1-ndk.so': blob_fixup()
@@ -256,6 +251,7 @@ blob_fixups: blob_fixups_user_type = {
         'vendor/lib64/libcodec2_vpp_AIMEMC_plugin.so',
         'vendor/lib64/libcodec2_vpp_AISR_plugin.so',
     ): blob_fixup()
+        .replace_needed('android.hardware.graphics.common-V4-ndk.so', 'android.hardware.graphics.common-V7-ndk.so')
         .replace_needed('libcodec2_soft_common.so', 'libcodec2_soft_common-v33.so')
         .replace_needed('libcodec2_vndk.so', 'libcodec2_vndk-v33.so')
         .replace_needed('libstagefright_foundation.so', 'libstagefright_foundation-v33.so')
