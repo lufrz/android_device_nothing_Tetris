@@ -402,6 +402,30 @@ bool refreshCapabilities() {
     return ok;
 }
 bool checkLease() {
+    if (lease >= 0) {
+        __u32 state = 0;
+        const int result = ioctl(lease, TETRIS_AUDIO_GET_STATE, &state);
+        const int error = result != 0 ? -errno : 0;
+        if (result != 0 || state != static_cast<unsigned>(leaseMode)) {
+            const bool stopped = result == 0 && state == static_cast<unsigned>(Mode::Off);
+            const auto owner = tetris_dsp_stereo_state().owner;
+            for (auto& [stream, output] : outputs) {
+                if (!output.active && stream != owner) continue;
+                if (stopped && !output.preempted) {
+                    // Stock mixer updates can revoke a healthy lease for a
+                    // notification or capture transition. Close it now and
+                    // retry later through all playback and kernel route guards.
+                    output.leaseRetryAfter = std::chrono::steady_clock::now() + kLeaseRetryDelay;
+                    recordPreemption("kernel_state_changed", 0);
+                } else {
+                    preemptOutput(output, result != 0 ? "kernel_state_read" :
+                                  "kernel_state_changed", error);
+                }
+            }
+            if (!revokePlayback("route")) return false;
+            resetHookTargets();
+        }
+    }
     const auto receiverState = receiver.state();
     if (leaseMode == Mode::Stereo && receiverState.failed) {
         timespec now{};
@@ -415,20 +439,8 @@ bool checkLease() {
         if (!revokePlayback(drained ? "idle" : "sync_error")) return false;
         resetHookTargets();
     }
-    if (lease < 0) return !tetris_dsp_stereo_state().dirty ||
+    return lease >= 0 || !tetris_dsp_stereo_state().dirty ||
             tetris_dsp_stereo_state().ready || restoreDspOwner();
-    __u32 state = 0;
-    const int result = ioctl(lease, TETRIS_AUDIO_GET_STATE, &state);
-    const int error = result != 0 ? -errno : 0;
-    if (result != 0 ||
-            state != static_cast<unsigned>(leaseMode)) {
-        // Teardown clears the DSP owner's active flag. Mark affected streams
-        // first; a dormant output never owned the lost route.
-        preemptPlaying(result != 0 ? "kernel_state_read" : "kernel_state_changed", error);
-        if (!revokePlayback("route")) return false;
-        resetHookTargets();
-    }
-    return true;
 }
 bool acquireLease(Mode mode) {
     leaseError = 0;
@@ -615,8 +627,8 @@ ssize_t writeOutput(audio_stream_out* stream, const void* buffer, size_t bytes) 
     } else if (!acquireLease(requestedBackend())) {
         // Route transitions may briefly hold the receiver. The failed attempt
         // has released its resources; retry only from a later eligible write,
-        // with a fresh clock and the kernel's full routing checks. Actual route
-        // loss and receiver faults still use the permanent preemption path.
+        // with a fresh clock and the kernel's full routing checks. Hardware and
+        // receiver faults still use the permanent preemption path.
         if (leaseError == -EBUSY || leaseError == -EAGAIN) {
             output.leaseRetryAfter = std::chrono::steady_clock::now() + kLeaseRetryDelay;
             playbackGate = "lease_busy";
@@ -1097,7 +1109,7 @@ char* getParameters(const audio_hw_device* dev, const char* keys) {
             (capabilities.modes & (1u << static_cast<unsigned>(Mode::Stereo)));
     std::string response = "tetris_audio_version=1;tetris_audio_available=";
     response += available ? "1" : "0";
-    response += ";tetris_audio_diagnostic_version=11";
+    response += ";tetris_audio_diagnostic_version=12";
     response += ";tetris_audio_stereo_available=";
     response += stereo ? "1" : "0";
     const auto receiverState = receiver.state();

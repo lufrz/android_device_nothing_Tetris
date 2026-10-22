@@ -49,6 +49,7 @@ std::string GetProperty(const std::string& key, const std::string&) {
 }
 }
 static unsigned kernelState;
+static int kernelStateReadError;
 static unsigned kernelGain;
 static int kernelGainDb;
 static int gainSetError;
@@ -260,6 +261,7 @@ extern "C" int __wrap_ioctl(int fd, unsigned long request, ...) {
             TETRIS_AUDIO_SPLIT_VERSION, 0, 4, 48000, 1,
             TETRIS_AUDIO_SPLIT_FORMAT_S32_LE, {0, 0}};
     } else if (request == TETRIS_AUDIO_GET_STATE) {
+        if (kernelStateReadError) { errno = kernelStateReadError; return -1; }
         *static_cast<__u32*>(value) = kernelState;
     } else if (request == TETRIS_AUDIO_SET_MODE) {
         ++leaseAttempts;
@@ -563,7 +565,7 @@ static void reset() {
     receiverGainDb = reportedGainDb = TETRIS_AUDIO_RECEIVER_DEFAULT_DB;
     kernelGainDb = TETRIS_AUDIO_RECEIVER_DEFAULT_DB;
     gainSupported = true; gainSetError = 0; revokeDuringGain = false; gainUpdates = 0;
-    kernelState = 0; kernelGain = 65535; hookKnown = true; bypass = false;
+    kernelState = 0; kernelStateReadError = 0; kernelGain = 65535; hookKnown = true; bypass = false;
     hookCalls = 0; mockGeneration = 0; hookGeneration = 0; mockScope = nullptr;
     inputCounts = {};
     currentFormat = AUDIO_FORMAT_PCM_16_BIT;
@@ -678,19 +680,19 @@ static void testVolumeCallbacks() {
         assert(!kernelState && !hookGeneration && !outputs.at(&stream).hookHandler);
         assert(outputs.at(&stream).preempted);
         writeOnce(); writeOnce(); assert(acquisitions == 1);
-        // Kernel ownership loss during the callback still wins immediately.
+        // Kernel ownership loss during the callback still stops the receiver immediately.
         reset(); enable("stereo"); revokeDuringParameter = true;
         assert(volumeCallback(kind) == 0);
         assert(!kernelState && !hookGeneration && !outputs.at(&stream).hookHandler);
-        assert(outputs.at(&stream).preempted);
+        assert(!outputs.at(&stream).preempted);
         writeOnce(); writeOnce(); assert(acquisitions == 1);
-        // A volume-only retry cannot rearm a route the kernel already revoked,
+        // A volume-only callback cannot bypass the fresh-route retry delay,
         // including repeated callbacks after the first one closed the lease.
         reset(); enable("stereo"); kernelState = 0;
         assert(volumeCallback(kind) == 0 && !parameterKernelState);
-        assert(outputs.at(&stream).preempted && !outputs.at(&stream).hookHandler);
+        assert(!outputs.at(&stream).preempted && !outputs.at(&stream).hookHandler);
         assert(volumeCallback(kind) == 0);
-        assert(outputs.at(&stream).preempted);
+        assert(!outputs.at(&stream).preempted);
         writeOnce(); writeOnce(); assert(acquisitions == 1);
         // A syntactically valid volume update cannot preserve an ineligible route.
         for (unsigned scenario = 0; scenario < 7; ++scenario) {
@@ -873,14 +875,14 @@ static void testDolbyVolumeNotification() {
             else revokeDuringParameter = true;
             assert(setParameters(nullptr, "volume_change=1;flags=8") == -EINVAL);
             assert(!kernelState && !hookGeneration && !outputs.at(&stream).hookHandler);
-            assert(outputs.at(&stream).preempted);
+            assert(!outputs.at(&stream).preempted);
             statusContains("tetris_audio_last_preempt=kernel_state_changed");
             const auto preemptions = preemptionCount;
             const auto preemptCause = std::string(lastPreemption);
             assert(setParameters(nullptr, "volume_change=2;flags=8") == -EINVAL);
             assert(preemptionCount == preemptions && lastPreemption == preemptCause);
             writeOnce(); writeOnce(); assert(acquisitions == 1);
-            statusContains("tetris_audio_playback_gate=preempted");
+            statusContains("tetris_audio_playback_gate=lease_busy");
         }
     }
     reset(); enable("stereo"); phoneMode = AUDIO_MODE_IN_CALL; parameterResult = -EINVAL;
@@ -986,7 +988,7 @@ static void testReceiverGain() {
         if (revokeBefore) kernelState = 0;
         else revokeDuringGain = true;
         assert(setParameters(nullptr, "tetris_audio_gain=-3") == 0);
-        assert(!kernelState && !hookGeneration && outputs.at(&stream).preempted);
+        assert(!kernelState && !hookGeneration && !outputs.at(&stream).preempted);
         assert(receiverGainDb == -3);
         writeOnce(); writeOnce(); assert(acquisitions == 1);
     }
@@ -1009,7 +1011,7 @@ template <typename Sample> static void testInputSamples(audio_format_t pcmFormat
     }
     assert(inputCounts.buffers == 4 && inputCounts.frames == 4 && inputCounts.different == 2);
     assert(inputCounts.leftNonzero == 2 && inputCounts.rightNonzero == 2);
-    statusContains("tetris_audio_diagnostic_version=11");
+    statusContains("tetris_audio_diagnostic_version=12");
     statusContains("tetris_audio_input_different=2");
     statusContains("tetris_audio_input_left_nonzero=2");
     statusContains("tetris_audio_input_right_nonzero=2");
@@ -1381,7 +1383,9 @@ static void testIdleOutputDoesNotBlockPlayback() {
     outputs.emplace(&second, dormant);
     kernelState = 0;
     writeOnce();
-    assert(outputs.at(&stream).preempted && !outputs.at(&second).preempted);
+    assert(!outputs.at(&stream).preempted && !outputs.at(&second).preempted);
+    assert(outputs.at(&stream).leaseRetryAfter != std::chrono::steady_clock::time_point{});
+    assert(outputs.at(&second).leaseRetryAfter == std::chrono::steady_clock::time_point{});
     assert(standbyOutput(&stream.common) == 0);
     writeOnce(&second); writeOnce(&second);
     assert(kernelState == 1 && acquisitions == 2);
@@ -1660,6 +1664,102 @@ static void testTransientLeaseRecovery() {
     receiverPrepareFails = false; expireLeaseRetry(); writeOnce();
     assert(kernelState == 2 && receiverStarts == 2 && receiverEnqueues == 1);
 }
+static void testStockRouteRevocationRecovery() {
+    // A short-lived stock route update must not require music to enter standby.
+    // The capture/output/metadata boundary may arrive after the kernel revokes
+    // the receiver, including an EPIPE caused by disconnecting its PCM route.
+    for (const char* mode : {"dual_mono", "stereo"}) {
+        for (unsigned transition = 0; transition < 4; ++transition) {
+            reset(); enable(mode);
+            const bool stereo = std::string(mode) == "stereo";
+            const unsigned before = acquisitions;
+            kernelState = 0;
+            if (stereo) receiverAsyncError = EPIPE;
+            writeOnce();
+            assert(!kernelState && lease < 0 && !receiver.state().open);
+            assert(!outputs.at(&stream).preempted);
+            assert(outputs.at(&stream).leaseRetryAfter != std::chrono::steady_clock::time_point{});
+            const auto acceptedBeforeRecovery = outputs.at(&stream).writtenFrames;
+            for (unsigned i = 0; i < 10; ++i) writeOnce();
+            assert(acquisitions == before && !kernelState);
+
+            playback_track_metadata notificationTrack{
+                AUDIO_USAGE_NOTIFICATION, AUDIO_CONTENT_TYPE_SONIFICATION, 1.f};
+            source_metadata notificationMetadata{1, &notificationTrack};
+            playback_track_metadata musicTrack{AUDIO_USAGE_MEDIA, AUDIO_CONTENT_TYPE_MUSIC, 1.f};
+            source_metadata musicMetadata{1, &musicTrack};
+            if (transition == 1) {
+                assert(openInput(nullptr, 1, AUDIO_DEVICE_IN_BUILTIN_MIC, nullptr, nullptr,
+                                 AUDIO_INPUT_FLAG_NONE, "", AUDIO_SOURCE_CAMCORDER) == 0);
+            } else if (transition == 2) {
+                auto notification = outputs.at(&stream);
+                notification.handle = 20;
+                notification.active = true;
+                notification.media = false;
+                notification.leaseRetryAfter = {};
+                outputs.emplace(&second, notification);
+            } else if (transition == 3) {
+                metadataOutput(&stream, &notificationMetadata);
+            }
+            if (transition) {
+                expireLeaseRetry();
+                writeOnce(); writeOnce();
+                assert(acquisitions == before && !kernelState);
+                if (transition == 1) closeInput(nullptr, nullptr);
+                else if (transition == 2) {
+                    standbyResult = -EIO;
+                    assert(standbyOutput(&second.common) == -EIO);
+                    writeOnce(); assert(acquisitions == before && !kernelState);
+                    standbyResult = 0;
+                    assert(standbyOutput(&second.common) == 0);
+                } else metadataOutput(&stream, &musicMetadata);
+            }
+            expireLeaseRetry();
+            writeOnce(); writeOnce();
+            assert(kernelState == (stereo ? 2u : 1u) && acquisitions == before + 1);
+            assert(!outputs.at(&stream).preempted);
+            assert(outputs.at(&stream).writtenFrames > acceptedBeforeRecovery);
+            if (stereo) assert(receiverFirstFrame >= acceptedBeforeRecovery);
+        }
+    }
+
+    // Recovery delays do not bypass calls, external routes, or live capture.
+    for (unsigned guard = 0; guard < 6; ++guard) {
+        reset(); enable("stereo"); kernelState = 0;
+        writeOnce(); expireLeaseRetry();
+        switch (guard) {
+            case 0: phoneMode = AUDIO_MODE_IN_CALL; break;
+            case 1: outputs.at(&stream).route = AUDIO_DEVICE_OUT_BLUETOOTH_A2DP; break;
+            case 2: outputs.at(&stream).route = AUDIO_DEVICE_OUT_WIRED_HEADPHONE; break;
+            case 3: inputs = 1; break;
+            case 4: unmanagedOutputs.insert(&second); break;
+            case 5: outputs.at(&stream).media = false; break;
+        }
+        const auto attempts = leaseAttempts;
+        writeOnce(); writeOnce();
+        assert(!kernelState && leaseAttempts == attempts && !receiver.state().open);
+    }
+    // Only a verified OFF state is recoverable. Read errors and unexpected
+    // states retain the existing explicit-recovery requirement.
+    for (bool readFailure : {false, true}) {
+        reset(); enable("stereo");
+        if (readFailure) kernelStateReadError = EIO;
+        else kernelState = 3;
+        writeOnce();
+        assert(outputs.at(&stream).preempted && !kernelState && lease < 0);
+        kernelStateReadError = 0;
+        expireLeaseRetry(); writeOnce(); writeOnce();
+        assert(acquisitions == 1 && !kernelState);
+    }
+    // The fresh kernel preflight may still find another route using the codec.
+    reset(); enable("stereo"); kernelState = 0; writeOnce();
+    rejectAcquire = true; acquireError = EBUSY;
+    expireLeaseRetry(); writeOnce();
+    assert(!kernelState && acquisitions == 1 && !outputs.at(&stream).preempted);
+    rejectAcquire = false;
+    writeOnce(); assert(!kernelState);
+    expireLeaseRetry(); writeOnce(); assert(kernelState == 2 && acquisitions == 2);
+}
 static void testMultipleMediaMetadata() {
     for (bool v7 : {false, true}) for (const char* mode : {"dual_mono", "stereo"}) {
         reset(); enable(mode);
@@ -1728,7 +1828,7 @@ static void testPlaybackDiagnostics() {
     lastPreemption = "kernel_state_changed";
     lastPreemptionError = std::numeric_limits<int>::min();
     preemptionCount = maximum;
-    statusContains("tetris_audio_diagnostic_version=11");
+    statusContains("tetris_audio_diagnostic_version=12");
 }
 static int routePatch(audio_stream_out* target, audio_devices_t route,
                       audio_patch_handle_t patchId) {
@@ -1782,9 +1882,9 @@ static void testBluetoothReturn() {
     assert(routePatch(&stream, AUDIO_DEVICE_OUT_SPEAKER, 13) == 0);
     writeOnce(); writeOnce(); assert(kernelState == 2);
 
-    // Notification traffic and duplicate speaker routes do not cure a genuine
-    // kernel revocation; a confirmed non-speaker -> speaker boundary does.
-    reset(); enable("stereo"); kernelState = 0;
+    // Notification traffic and duplicate speaker routes do not cure an invalid
+    // kernel state; a confirmed non-speaker -> speaker boundary permits a retry.
+    reset(); enable("stereo"); kernelState = 3;
     writeOnce(); assert(outputs.at(&stream).preempted);
     const unsigned attempts = acquisitions;
     assert(routePatch(&stream, AUDIO_DEVICE_OUT_SPEAKER, 12) == 0);
@@ -1998,6 +2098,7 @@ int main() {
         assert(file && std::fclose(file) == 0);
     }
     testTransientLeaseRecovery();
+    testStockRouteRevocationRecovery();
     testMultipleMediaMetadata();
     testConsentGate();
     testReopenPreferences();
@@ -2071,9 +2172,9 @@ int main() {
     assert((events == std::vector<std::string>{"restore", "input"}));
     writeOnce(); writeOnce(); assert(kernelState == 0);
     closeInput(nullptr, nullptr); writeOnce(); assert(kernelState == 1);
-    reset(); enable("stereo"); kernelState = 0; // Kernel synchronously preempted us.
+    reset(); enable("stereo"); kernelState = 0; // Stock mixer revoked the lease.
     writeOnce(); writeOnce(); assert(acquisitions == 1 && !lastBypass);
-    standbyOutput(&stream.common); writeOnce(); writeOnce(); assert(acquisitions == 2);
+    expireLeaseRetry(); writeOnce(); assert(acquisitions == 2);
     for (unsigned gain : {208u, 65535u}) {
         reset(); kernelGain = gain; enable();
         statusContains("tetris_audio_available=1");
