@@ -121,6 +121,21 @@ after it expires, the strongest remaining margin applies. This targets the first
 frames after idle, but still relies on GED's next loading-policy evaluation and
 needs validation on the device.
 
+PowerHAL also requests a 700 MHz minimum during interaction, app launch and
+expensive rendering. The kernel maps 700000 kHz to the lowest supported working
+OPP at or above that value, rather than assuming an OPP index or changing the
+frequency table. The request uses the same hint lifetimes as the margin above.
+Overlapping hints share one floor; the final release writes `boost 0`, and PowerHAL
+initialization releases any stale UI request.
+
+The matching `mtk_gpufreq_wrapper.ko` implements the `boost <kHz>` command in
+`/proc/gpufreqv2/limit_table`. It combines the UI request with existing APIBOOST
+requests and restores the latest non-UI request on release. A manual DEBUG range
+suspends the UI floor. This leaves frequency ceilings and the driver's limiter
+arbitration in place; it does not fix the GPU at one clock or change its maximum.
+The updated kernel module and powerhint configuration must ship together. Actual
+clocks and frame timing still require validation on the phone.
+
 The manual GPU controls in Parts use the existing GPUEB firmware interface.
 Their settings are not reapplied at boot. The dialog scrolls its explanation and
 controls together for long translations and large fonts. The exact proc node has

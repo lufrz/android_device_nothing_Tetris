@@ -80,6 +80,21 @@
       "ResetOnInit": true
     },
     {
+      "Name": "GpuUiMinFreq",
+      "Path": "/proc/gpufreqv2/limit_table",
+      "Values": [
+        "boost 700000",
+        "boost 0"
+      ],
+      "DefaultIndex": 1,
+      "ResetOnInit": true,
+      "Comments": [
+        "Request a 700 MHz minimum using the lowest supported OPP at or above 700000 kHz.",
+        "The matching gpufreq module combines this request with APIBOOST and releases it when all UI hints end.",
+        "Manual DEBUG ranges suspend this floor; frequency ceilings and driver arbitration remain in effect."
+      ]
+    },
+    {
       "Name": "GpuBaseDvfsMargin",
       "Path": "/sys/kernel/ged/hal/timer_base_dvfs_margin",
       "Values": [
@@ -216,6 +231,12 @@
     },
     {
       "PowerHint": "INTERACTION",
+      "Node": "GpuUiMinFreq",
+      "Duration": 0,
+      "Value": "boost 700000"
+    },
+    {
+      "PowerHint": "INTERACTION",
       "Node": "GpuBaseDvfsMargin",
       "Duration": 0,
       "Value": "48"
@@ -272,6 +293,12 @@
       "Node": "MemFreq",
       "Duration": 1500,
       "Value": "4266000000"
+    },
+    {
+      "PowerHint": "LAUNCH",
+      "Node": "GpuUiMinFreq",
+      "Duration": 1500,
+      "Value": "boost 700000"
     },
     {
       "PowerHint": "LAUNCH",
@@ -338,6 +365,12 @@
       "Node": "CPUEfficiencyClusterMinFreq",
       "Duration": 0,
       "Value": "1200000"
+    },
+    {
+      "PowerHint": "EXPENSIVE_RENDERING",
+      "Node": "GpuUiMinFreq",
+      "Duration": 0,
+      "Value": "boost 700000"
     },
     {
       "PowerHint": "EXPENSIVE_RENDERING",
