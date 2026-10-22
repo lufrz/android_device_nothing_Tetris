@@ -173,6 +173,36 @@ Battery shows level, charging state, health, temperature, voltage, current and
 charge counter. Unsupported measurements show unavailable, not a made-up zero.
 Polling stops while each destination is not resumed.
 
+The Battery page also has an experimental **Charger-powered mode** switch.
+It uses only the patched charger's dedicated `charge_bypass` request and versioned
+`charge_bypass_status`; it never writes shared charging-enable or power-path
+controls. The request and hardware activation are shown separately. Active means
+the kernel verified that battery charging and the charge pumps are disabled while
+the charger power path remains enabled. The battery stays connected and may
+supplement charger power under load. A paused or failed request is never displayed
+as verified activation, and an existing request can be switched off even when
+telemetry or charger connection is unavailable.
+
+The driver refreshes the allowed input current after fast-charge shutdown so the
+phone is not left with the PD stop sequence's 100 mA limit. It retains source,
+USB/PD, thermal and known AICL limits without restarting battery charging. If the
+input budget cannot be verified or is below the hardware minimum, the request
+stays pending and input is suspended until the policy can verify a usable limit.
+This does not isolate the battery electrically or guarantee an exact charge level.
+
+The kernel clears the request on unplug and starts with it off after reboot.
+Parts stores no preference and runs no service or periodic writer for this feature.
+Consent reset releases only this dedicated request; the charger policy decides
+whether ordinary charging can resume. `tests/battery/run-tests.sh` checks parsing,
+acknowledgement, failed writes, consent races, release and external/kernel updates.
+This feature requires matching charger modules from the active `nt_supply` driver,
+the Parts APK, and its init/SELinux configuration. Rebuild and verify all consumers
+of the charger interfaces together: installing the APK alone cannot add the kernel
+control, and mixing old/new charger modules can break their versioned interfaces.
+The 12 new strings are currently translated into Italian; other locales use English
+fallback. The product-wide localization checker remains unchanged and reports
+these gaps alongside the pre-existing audio, network, terms and other gaps.
+
 ## Temperatures and adaptive control
 
 The Temperatures page combines the Android thermal service, readable kernel

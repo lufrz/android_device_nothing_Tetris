@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <string name="charge_bypass_title">Charger-powered mode</string>
+    <string name="charge_bypass_about">About charging suspension</string>
+    <string name="charge_bypass_about_summary">Experimental: use charger power while battery charging is paused. The battery stays connected and may supply extra power under load. Turns off when unplugged or after a reboot. Other charging safety controls remain active.</string>
+    <string name="charge_bypass_off">Off</string>
+    <string name="charge_bypass_offline">Connect a charger to use this control.</string>
+    <string name="charge_bypass_active">Active: the charger power path is enabled and battery charging is paused.</string>
+    <string name="charge_bypass_paused">Requested, but suspension is not verified. Another charging control may be active.</string>
+    <string name="charge_bypass_error">Charger controller error (%1$d). Switch off to release an existing request.</string>
+    <string name="charge_bypass_unavailable">Unavailable: an updated kernel and access to its charging controls are required.</string>
+    <string name="charge_bypass_unverified">Status unavailable. Switch off to release the existing request.</string>
+    <string name="charge_bypass_failed">Change not confirmed</string>
+    <string name="charge_bypass_failed_summary">Check the current status and try again. An unconfirmed request may still be enabled; switch it off to release it.</string>
+</resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<resources>
+    <string name="charge_bypass_title">Alimentazione da caricatore</string>
+    <string name="charge_bypass_about">Informazioni sulla sospensione della ricarica</string>
+    <string name="charge_bypass_about_summary">Sperimentale: usa l\'alimentazione del caricabatterie mentre la ricarica della batteria è sospesa. La batteria rimane collegata e può fornire energia aggiuntiva sotto carico. Si disattiva scollegando il caricabatterie o riavviando il telefono. Gli altri controlli di sicurezza della ricarica restano attivi.</string>
+    <string name="charge_bypass_off">Disattivata</string>
+    <string name="charge_bypass_offline">Collega un caricabatterie per usare questo controllo.</string>
+    <string name="charge_bypass_active">Attiva: il percorso di alimentazione dal caricabatterie è abilitato e la ricarica della batteria è sospesa.</string>
+    <string name="charge_bypass_paused">Richiesta inviata, ma la sospensione non è verificata. Potrebbe essere attivo un altro controllo della ricarica.</string>
+    <string name="charge_bypass_error">Errore del controller di ricarica (%1$d). Disattiva il controllo per annullare una richiesta esistente.</string>
+    <string name="charge_bypass_unavailable">Non disponibile: servono un kernel aggiornato e l\'accesso ai relativi controlli di ricarica.</string>
+    <string name="charge_bypass_unverified">Stato non disponibile. Disattiva il controllo per annullare la richiesta esistente.</string>
+    <string name="charge_bypass_failed">Modifica non confermata</string>
+    <string name="charge_bypass_failed_summary">Controlla lo stato attuale e riprova. Una richiesta non confermata potrebbe essere ancora attiva: disattiva il controllo per annullarla.</string>
+</resources>

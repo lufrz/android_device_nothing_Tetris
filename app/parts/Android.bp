@@ -34,6 +34,7 @@ android_app {
         "privapp-permissions-org.lineageos.settings.tetris.xml",
         "init.tetris_parts_cpu.rc",
         "init.tetris_parts_gpu.rc",
+        "init.tetris_parts_charging.rc",
         "init.tetris_parts_network.rc",
         "tetris_parts_thermal_control",
     ],
@@ -56,6 +57,13 @@ prebuilt_etc {
 prebuilt_etc {
     name: "init.tetris_parts_gpu.rc",
     src: "init.tetris_parts_gpu.rc",
+    sub_dir: "init",
+    vendor: true,
+}
+
+prebuilt_etc {
+    name: "init.tetris_parts_charging.rc",
+    src: "init.tetris_parts_charging.rc",
     sub_dir: "init",
     vendor: true,
 }

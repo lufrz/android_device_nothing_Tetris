@@ -1,0 +1,7 @@
+# A separate charge-inhibition request, with hardware readback on a read-only node.
+# Ordinary charging, thermal current limits and power-path switches remain private.
+type vendor_tetris_charge_bypass, fs_type, sysfs_type;
+type vendor_tetris_charge_bypass_status, fs_type, sysfs_type;
+
+allow tetris_parts_app vendor_tetris_charge_bypass:file { getattr open read write };
+allow tetris_parts_app vendor_tetris_charge_bypass_status:file { getattr open read };

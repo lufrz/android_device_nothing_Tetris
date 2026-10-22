@@ -1,4 +1,6 @@
 # Charger
+genfscon sysfs /devices/platform/charger/charge_bypass u:object_r:vendor_tetris_charge_bypass:s0
+genfscon sysfs /devices/platform/charger/charge_bypass_status u:object_r:vendor_tetris_charge_bypass_status:s0
 genfscon proc /charger                                                         u:object_r:vendor_proc_charger:s0
 genfscon sysfs /devices/platform/nt_chg/power_supply                           u:object_r:sysfs_batteryinfo:s0
 genfscon sysfs /devices/platform/soc/11d71000.i2c/i2c-11/11-006a/power_supply  u:object_r:sysfs_batteryinfo:s0

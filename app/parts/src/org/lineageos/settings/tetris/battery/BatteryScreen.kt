@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +60,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.lineageos.settings.tetris.R
 import org.lineageos.settings.tetris.ui.Motion
@@ -67,7 +69,9 @@ import org.lineageos.settings.tetris.ui.PartsGroupShape
 import org.lineageos.settings.tetris.ui.PartsInfoCard
 import org.lineageos.settings.tetris.ui.PartsMetricCard
 import org.lineageos.settings.tetris.ui.PartsPageGutter
+import org.lineageos.settings.tetris.ui.PartsPreferenceGroup
 import org.lineageos.settings.tetris.ui.PartsScaffold
+import org.lineageos.settings.tetris.ui.PartsSwitchPreference
 
 @Composable
 fun BatteryScreen(onBack: () -> Unit) {
@@ -75,6 +79,11 @@ fun BatteryScreen(onBack: () -> Unit) {
     val owner = LocalLifecycleOwner.current
     var resumed by remember(owner) { mutableStateOf(owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     var snapshot by remember { mutableStateOf(BatterySnapshot()) }
+    var bypass by remember { mutableStateOf(ChargeBypassState()) }
+    var bypassBusy by remember { mutableStateOf(false) }
+    var bypassFailed by remember { mutableStateOf(false) }
+    var bypassRevision by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
     DisposableEffect(owner) {
         val observer = LifecycleEventObserver { _, _ ->
             resumed = owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
@@ -85,8 +94,31 @@ fun BatteryScreen(onBack: () -> Unit) {
     LaunchedEffect(context, resumed) {
         if (!resumed) return@LaunchedEffect
         while (isActive) {
-            snapshot = withContext(Dispatchers.IO) { readBatterySnapshot(context) }
+            val revision = bypassRevision
+            val readControl = !bypassBusy
+            val readings = withContext(Dispatchers.IO) {
+                readBatterySnapshot(context) to if (readControl) ChargeBypassSession.manager.readState() else null
+            }
+            snapshot = readings.first
+            // A read started before a user action must not replace the action's verified result.
+            if (revision == bypassRevision && !bypassBusy) readings.second?.let { bypass = it }
             delay(2_000)
+        }
+    }
+
+    fun changeBypass(enabled: Boolean) {
+        if (!resumed || bypassBusy) return
+        bypassBusy = true
+        bypassFailed = false
+        bypassRevision++
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { ChargeBypassSession.manager.setRequested(enabled) }
+                bypass = result.state
+                bypassFailed = !result.successful
+            } finally {
+                bypassBusy = false
+            }
         }
     }
 
@@ -159,6 +191,38 @@ fun BatteryScreen(onBack: () -> Unit) {
             item("battery_about") {
                 PartsInfoCard(title = stringResource(R.string.battery_about),
                     body = stringResource(R.string.battery_about_summary))
+            }
+            item("charge_bypass_section") { PartsCategoryTitle(stringResource(R.string.experimental_audio_title)) }
+            item("charge_bypass_control") {
+                val status = bypass.status
+                val summary = when {
+                    status == null && bypass.canStop -> stringResource(R.string.charge_bypass_unverified)
+                    status == null -> stringResource(R.string.charge_bypass_unavailable)
+                    status.error != 0 -> stringResource(R.string.charge_bypass_error, status.error)
+                    status.active -> stringResource(R.string.charge_bypass_active)
+                    bypass.canStop -> stringResource(R.string.charge_bypass_paused)
+                    !status.online -> stringResource(R.string.charge_bypass_offline)
+                    !bypass.writable -> stringResource(R.string.charge_bypass_unavailable)
+                    else -> stringResource(R.string.charge_bypass_off)
+                }
+                PartsPreferenceGroup {
+                    PartsSwitchPreference(
+                        title = stringResource(R.string.charge_bypass_title),
+                        summary = summary,
+                        checked = bypass.canStop,
+                        enabled = !bypassBusy && (bypass.canStop || bypass.canEnable),
+                        icon = Icons.Filled.BatteryChargingFull,
+                        onCheckedChange = ::changeBypass,
+                    )
+                }
+            }
+            if (bypassFailed) item("charge_bypass_failure") {
+                PartsInfoCard(title = stringResource(R.string.charge_bypass_failed),
+                    body = stringResource(R.string.charge_bypass_failed_summary))
+            }
+            item("charge_bypass_about") {
+                PartsInfoCard(title = stringResource(R.string.charge_bypass_about),
+                    body = stringResource(R.string.charge_bypass_about_summary))
             }
         }
     }
