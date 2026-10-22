@@ -108,21 +108,17 @@ an atomic compare-and-swap against external writers. Other limiters can narrow
 the result or resolve a conflicting range according to driver priorities. A
 powered-down GPU shows idle, rather than presenting a stale clock as active.
 
-PowerHAL boosts app launch for 1500 ms and expensive rendering until the hint
-ends through the driver's APIBOOST floor. This replaces the old fixed-OPP actions
-and restores the boosts previously removed globally, including in automatic mode.
-The selected manual DEBUG ceiling is respected; in automatic mode thermal
-ceilings also take precedence. An explicit manual DEBUG floor can lend its higher
-aggregate priority to the boost, including over thermal ceilings, as determined
-by the driver's existing arbitration. Hint release clears the APIBOOST floor;
-it neither rewrites the manual range nor switches to fixed-frequency mode. CPU,
-memory and GPU DVFS margin/step hints remain active.
+PowerHAL requests earlier GPU upshifts through GED's loading-based DVFS margin.
+The upshift thresholds are 43% GPU load during app launch (1500 ms), 47% during
+expensive rendering, and 52% during interaction. Rendering follows the hint's
+lifetime; interaction follows the display-idle handler with a bounded timeout
+fallback. When these hints end, the idle threshold returns to 70%.
 
-This uses the existing GPUEB firmware controls and needs no kernel rebuild.
-Changes are not reapplied at boot. The dialog scrolls its explanation and controls
-together for long translations and large fonts. The exact proc node has a dedicated
-SELinux label; app code limits writes to DEBUG, while SELinux limits file access,
-not individual rows. GPU operation still needs verification on the physical phone.
+The manual GPU controls in Parts use the existing GPUEB firmware interface.
+Their settings are not reapplied at boot. The dialog scrolls its explanation and
+controls together for long translations and large fonts. The exact proc node has
+a dedicated SELinux label; app code limits writes to DEBUG, while SELinux limits
+file access, not individual rows. CPU and memory hints are unchanged.
 
 ## Thermal fix
 

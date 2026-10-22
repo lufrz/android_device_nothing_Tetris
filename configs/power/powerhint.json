@@ -83,14 +83,15 @@
       "Name": "GpuBaseDvfsMargin",
       "Path": "/sys/kernel/ged/hal/timer_base_dvfs_margin",
       "Values": [
-        "50",
-        "40",
+        "57",
+        "53",
+        "48",
         "30"
       ],
-      "DefaultIndex": 2,
+      "DefaultIndex": 3,
       "ResetOnInit": true,
       "Comments": [
-        "Loading-based upshift thresholds: 50% during launch, 60% during interaction/rendering, 70% at idle.",
+        "Loading-based upshift thresholds: 43% during launch, 47% during rendering, 52% during interaction, 70% at idle.",
         "Hints restore the idle margin when released without changing GPU frequency limits."
       ]
     },
@@ -103,7 +104,7 @@
       "DefaultIndex": 0,
       "ResetOnInit": true,
       "Comments": [
-        "Restore the kernel default 0x103: 3 OPP steps up and 1 down. The store parses bare numbers as decimal."
+        "Default ultra-high/ultra-low step encoding 0x103 (3/1); MT6878's platform step table takes precedence. The store parses bare numbers as decimal."
       ]
     },
     {
@@ -215,7 +216,7 @@
       "PowerHint": "INTERACTION",
       "Node": "GpuBaseDvfsMargin",
       "Duration": 0,
-      "Value": "40"
+      "Value": "48"
     },
     {
       "PowerHint": "INTERACTION",
@@ -263,7 +264,7 @@
       "PowerHint": "LAUNCH",
       "Node": "GpuBaseDvfsMargin",
       "Duration": 1500,
-      "Value": "50"
+      "Value": "57"
     },
     {
       "PowerHint": "LAUNCH",
@@ -329,7 +330,7 @@
       "PowerHint": "EXPENSIVE_RENDERING",
       "Node": "GpuBaseDvfsMargin",
       "Duration": 0,
-      "Value": "40"
+      "Value": "53"
     },
     {
       "PowerHint": "EXPENSIVE_RENDERING",
