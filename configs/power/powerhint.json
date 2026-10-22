@@ -83,15 +83,17 @@
       "Name": "GpuBaseDvfsMargin",
       "Path": "/sys/kernel/ged/hal/timer_base_dvfs_margin",
       "Values": [
+        "65",
         "57",
         "53",
         "48",
         "30"
       ],
-      "DefaultIndex": 3,
+      "DefaultIndex": 4,
       "ResetOnInit": true,
       "Comments": [
         "Loading-based upshift thresholds: 43% during launch, 47% during rendering, 52% during interaction, 70% at idle.",
+        "Each interaction hint also requests a 35% threshold for 120 ms through GPU_INTERACTION_START, independently of the parent timeout override.",
         "Hints restore the idle margin when released without changing GPU frequency limits."
       ]
     },
@@ -235,6 +237,17 @@
       "Node": "UclampTALatency",
       "Duration": 0,
       "Value": "1"
+    },
+    {
+      "PowerHint": "INTERACTION",
+      "Type": "DoHint",
+      "Value": "GPU_INTERACTION_START"
+    },
+    {
+      "PowerHint": "GPU_INTERACTION_START",
+      "Node": "GpuBaseDvfsMargin",
+      "Duration": 120,
+      "Value": "65"
     },
     {
       "PowerHint": "LAUNCH",

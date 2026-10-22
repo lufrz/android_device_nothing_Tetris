@@ -114,6 +114,13 @@ expensive rendering, and 52% during interaction. Rendering follows the hint's
 lifetime; interaction follows the display-idle handler with a bounded timeout
 fallback. When these hints end, the idle threshold returns to 70%.
 
+Each interaction hint also starts a 120 ms GPU margin request with a 35% upshift
+threshold. Its separate hint keeps this timeout independent of the interaction
+fallback's 500–1500 ms timeout. New interaction hints renew the short request;
+after it expires, the strongest remaining margin applies. This targets the first
+frames after idle, but still relies on GED's next loading-policy evaluation and
+needs validation on the device.
+
 The manual GPU controls in Parts use the existing GPUEB firmware interface.
 Their settings are not reapplied at boot. The dialog scrolls its explanation and
 controls together for long translations and large fonts. The exact proc node has
