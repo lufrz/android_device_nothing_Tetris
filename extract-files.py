@@ -136,7 +136,8 @@ blob_fixups: blob_fixups_user_type = {
         .remove_needed('libarcsoft_dualcam_refocus_image.so')
         .remove_needed('libarcsoft_beautyshot.so')
         .remove_needed('libarcsoft_aiscenedetection.so')
-        .remove_needed('libarcsoft_high_dynamic_range_v5.so'),
+        .remove_needed('libarcsoft_high_dynamic_range_v5.so')
+        .binary_regex_replace(b'\xc8\x00\x9e\x12\xa8\x02\x08\x0b\x1f\x05\x00\x71\xc8\x00\x00\x54', b'\xc8\x00\x9e\x12\xa8\x02\x08\x0b\x1f\x05\x00\x71\x1f\x20\x03\xd5'),
     'vendor/bin/hw/mt6878/camerahalserver': blob_fixup()
         .add_needed('libcamera_metadata_shim.so'),
     (
