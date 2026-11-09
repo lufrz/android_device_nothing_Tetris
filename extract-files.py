@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-import hashlib
-
 from extract_utils.file import File
 from extract_utils.fixups_blob import (
     blob_fixup,
@@ -29,47 +27,17 @@ namespace_imports = [
 def lib_fixup_vendor_suffix(lib: str, partition: str, *args, **kwargs):
     return f'{lib}_{partition}' if partition == 'vendor' else None
 
-def blob_fixup_goodix_ui_ready_timeout(ctx, file: File, file_path: str,
-                                     *args, **kwargs):
-    # Screen-off pulses can exceed the stock 450 ms UI-ready deadline. Extend
-    # only the maximum wait to 1000 ms; readiness and finger-up still wake it.
-    original_hash = 'e9766a94fa3cf501de3449f37c45676ea9fe545fc3da0bcead65e1ae63245c07'
-    patched_hash = 'f80d3c632b76ad4d0b2e5de44dae604f75269deaff3d87b4de046336e993f92f'
-    offset = 0x31620
-    original_instruction = bytes.fromhex('41 38 80 52')  # mov w1, #450
-    patched_instruction = bytes.fromhex('01 7d 80 52')  # mov w1, #1000
-
-    with open(file_path, 'r+b') as blob:
-        data = blob.read()
-        digest = hashlib.sha256(data).hexdigest()
-        if digest == patched_hash:
-            return
-        if digest != original_hash:
-            raise ValueError(f'Unsupported libgf_hal.so UI-ready fixup: {digest}')
-        if data[offset:offset + 4] != original_instruction:
-            raise ValueError('Unexpected Goodix UI-ready wait instruction')
-
-        patched = data[:offset] + patched_instruction + data[offset + 4:]
-        if hashlib.sha256(patched).hexdigest() != patched_hash:
-            raise ValueError('Unexpected Goodix UI-ready fixup result')
-        blob.seek(offset)
-        blob.write(patched_instruction)
-
-
 lib_fixups: lib_fixups_user_type = {
     **lib_fixups,
     (
         'libneuron_graph_delegate.mtk',
         'libtflite_mtk',
         'vendor.mediatek.hardware.apuware.utils@2.0',
-        'vendor.mediatek.hardware.bluetooth.audio-V1-ndk',
         'vendor.mediatek.hardware.videotelephony@1.0'
     ): lib_fixup_vendor_suffix,
 }
 
 blob_fixups: blob_fixups_user_type = {
-    'vendor/lib64/libgf_hal.so': blob_fixup()
-        .call(blob_fixup_goodix_ui_ready_timeout, need_tmp_dir=False),
     (
         'system_ext/etc/init/init.vtservice.rc',
         'vendor/etc/init/android.hardware.neuralnetworks-shim-service-mtk.rc'
@@ -92,8 +60,6 @@ blob_fixups: blob_fixups_user_type = {
         .add_line_if_missing('rsn_overriding=1'),
     'vendor/lib64/hw/android.hardware.audio@7.1-impl-mediatek.so': blob_fixup()
         .replace_needed('android.hardware.audio@7.1-util.so', 'android.hardware.audio@7.1-util-v34.so'),
-    'vendor/lib64/hw/android.hardware.soundtrigger3-impl.so': blob_fixup()
-        .replace_needed('libaudio_aidl_conversion_common_ndk.so', 'libaudio_aidl_conversion_common_ndk-v34.so'),
     'vendor/lib64/hw/audio.primary.mediatek.so': blob_fixup()
         .add_needed('libstagefright_foundation-v33.so')
         .replace_needed('libalsautils.so', 'libalsautils-v33.so')
@@ -102,6 +68,7 @@ blob_fixups: blob_fixups_user_type = {
         .binary_regex_replace(b'BTAudiosuspend', b'A2dpSuspended\x00'),
     'vendor/lib64/hw/hwcomposer.mtk_common.so': blob_fixup()
         .add_needed('libprocessgroup_shim.so')
+        .binary_regex_replace(b'NTFingerprintDimLayer', b'[Dim Layer for UDFPS]')
         .replace_needed('vendor.mediatek.hardware.pq_aidl-V4-ndk.so', 'vendor.mediatek.hardware.pq_aidl-V7-ndk.so'),
     'vendor/bin/mnld': blob_fixup()
         .replace_needed('libmnl.so', 'libmnl_mtk.so'),
@@ -137,9 +104,7 @@ blob_fixups: blob_fixups_user_type = {
         .remove_needed('libarcsoft_beautyshot.so')
         .remove_needed('libarcsoft_aiscenedetection.so')
         .remove_needed('libarcsoft_high_dynamic_range_v5.so')
-        .binary_regex_replace(b'\xc8\x00\x9e\x12\xa8\x02\x08\x0b\x1f\x05\x00\x71\xc8\x00\x00\x54', b'\xc8\x00\x9e\x12\xa8\x02\x08\x0b\x1f\x05\x00\x71\x1f\x20\x03\xd5'),
-    'vendor/bin/hw/mt6878/camerahalserver': blob_fixup()
-        .add_needed('libcamera_metadata_shim.so'),
+        .sig_replace('c8 00 9e 12 a8 02 08 0b 1f 05 00 71 c8 00 00 54', 'c8 00 9e 12 a8 02 08 0b 1f 05 00 71 1f 20 03 d5'),
     (
         'vendor/lib64/mt6878/libcam.hal3a.so',
         'vendor/lib64/mt6878/libcam.hal3a.ctrl.so',
@@ -147,9 +112,10 @@ blob_fixups: blob_fixups_user_type = {
         'vendor/lib64/libmtkcam_cputrack.so',
     ): blob_fixup()
         .add_needed('libprocessgroup_shim.so'),
+    'vendor/lib64/libcamera2ndk_vendor-v33.so': blob_fixup()
+        .replace_needed('libstagefright_foundation.so', 'libstagefright_foundation-v33.so'),
     'vendor/lib64/libntcamcore.so': blob_fixup()
-        .remove_needed('libntcamextened.so')
-        .replace_needed('android.hardware.graphics.allocator-V1-ndk.so', 'android.hardware.graphics.allocator-V2-ndk.so'),
+        .remove_needed('libntcamextened.so'),
     (
         'vendor/bin/hw/mt6878/android.hardware.graphics.allocator-V2-service-mediatek.mt6878',
         'vendor/lib64/egl/mt6878/libGLES_mali.so',
@@ -158,6 +124,11 @@ blob_fixups: blob_fixups_user_type = {
         'vendor/lib64/hw/mt6878/mapper.mediatek.so',
         'vendor/lib64/libaimemc.so',
         'vendor/lib64/libcodec2_fsr.so',
+        'vendor/lib64/libcodec2_vpp_AIMEMC_plugin.so',
+        'vendor/lib64/libcodec2_vpp_AISR_plugin.so',
+        'vendor/lib64/libmtkcam_grallocutils.so',
+        'vendor/lib64/mt6878/libmtkcam_grallocutils.so',
+        'vendor/lib64/libmtkcam_grallocutils_aidlv1helper.so',
         'vendor/lib64/vendor.mediatek.hardware.camera.isphal-V1-ndk.so',
         'vendor/lib64/vendor.mediatek.hardware.pq_aidl-V2-ndk.so',
         'vendor/lib64/vendor.mediatek.hardware.pq_aidl-V4-ndk.so',
@@ -168,8 +139,8 @@ blob_fixups: blob_fixups_user_type = {
         'vendor/lib64/libmtkcam_grallocutils.so',
         'vendor/lib64/mt6878/libmtkcam_grallocutils.so',
         'vendor/lib64/libmtkcam_grallocutils_aidlv1helper.so',
+        'vendor/lib64/libntcamcore.so',
     ): blob_fixup()
-        .replace_needed('android.hardware.graphics.common-V4-ndk.so', 'android.hardware.graphics.common-V7-ndk.so')
         .replace_needed('android.hardware.graphics.allocator-V1-ndk.so', 'android.hardware.graphics.allocator-V2-ndk.so'),
     (
         'vendor/lib64/mt6878/libdpframework.so',
@@ -178,10 +149,16 @@ blob_fixups: blob_fixups_user_type = {
         .replace_needed('vendor.mediatek.hardware.pq_aidl-V2-ndk.so', 'vendor.mediatek.hardware.pq_aidl-V7-ndk.so'),
     'vendor/lib64/mt6878/libpqconfig.so': blob_fixup()
         .replace_needed('android.hardware.sensors-V2-ndk.so', 'android.hardware.sensors-V3-ndk.so'),
-    'vendor/lib64/vendor.mediatek.hardware.bluetooth.audio-V1-ndk.so': blob_fixup()
-        .replace_needed('android.hardware.audio.common-V1-ndk.so', 'android.hardware.audio.common-V2-ndk.so'),
     'vendor/lib64/mt6878/libmtkcam_hal_aidl_common.so': blob_fixup()
         .replace_needed('android.hardware.camera.common-V2-ndk.so', 'android.hardware.camera.common-V1-ndk.so'),
+    'vendor/lib64/mt6878/libmtkcam_metastore.so': blob_fixup()
+        .sig_replace('00 e4 00 6f 41 03 80 52 e0 83 00 91 21 00 a0 72 e0 03 01 ad e0 03 02 ad 55 94 01 94', 'f2 ff ff 17')
+        .sig_replace('00 e4 00 6f 41 03 80 52 e0 83 00 91 21 00 a0 72 e0 03 01 ad e0 03 02 ad 25 82 01 94', 'f2 ff ff 17')
+        .sig_replace('00 e4 00 6f 41 03 80 52 e0 83 00 91 21 00 a0 72 e0 03 01 ad e0 03 02 ad 32 1a 02 94', 'f4 ff ff 17')
+        .sig_replace('00 e4 00 6f 41 03 80 52 e0 83 00 91 21 00 a0 72 e0 03 01 ad e0 03 02 ad e6 22 02 94', 'f4 ff ff 17')
+        .sig_replace('00 e4 00 6f 41 03 80 52 e0 83 00 91 21 00 a0 72 e0 03 01 ad e0 03 02 ad 7e 11 02 94', 'f4 ff ff 17')
+        .sig_replace('00 e4 00 6f 41 03 80 52 e0 83 00 91 21 00 a0 72 e0 03 01 ad e0 03 02 ad 5e 08 02 94', 'f4 ff ff 17')
+        .sig_replace('00 e4 00 6f 41 03 80 52 e0 83 00 91 21 00 a0 72 e0 03 01 ad e0 03 02 ad aa ff 01 94', 'f4 ff ff 17'),
     'vendor/lib64/mt6878/libmorpho_video_stabilizer.so': blob_fixup()
         .add_needed('libutils.so'),
     'vendor/lib64/mt6878/libneuralnetworks_sl_driver_mtk_prebuilt.so': blob_fixup()
@@ -252,7 +229,6 @@ blob_fixups: blob_fixups_user_type = {
         'vendor/lib64/libcodec2_vpp_AIMEMC_plugin.so',
         'vendor/lib64/libcodec2_vpp_AISR_plugin.so',
     ): blob_fixup()
-        .replace_needed('android.hardware.graphics.common-V4-ndk.so', 'android.hardware.graphics.common-V7-ndk.so')
         .replace_needed('libcodec2_soft_common.so', 'libcodec2_soft_common-v33.so')
         .replace_needed('libcodec2_vndk.so', 'libcodec2_vndk-v33.so')
         .replace_needed('libstagefright_foundation.so', 'libstagefright_foundation-v33.so')
@@ -267,6 +243,12 @@ blob_fixups: blob_fixups_user_type = {
         .add_needed('libnativewindow.so'),
     'vendor/bin/hw/mtkfusionrild': blob_fixup()
         .add_needed('libutils-v33.so'),
+    'vendor/bin/hw/android.hardware.biometrics.face-service.noth': blob_fixup()
+        .replace_needed('libcamera2ndk_vendor.so', 'libcamera2ndk_vendor-v33.so'),
+    'vendor/lib64/libstfaceunlockppl.so': blob_fixup()
+        .sig_replace('fd 7b bd a9 fd 03 00 91 f3 53 01 a9 f4 03 00 aa f3 03 01 aa 40 84 02 b0', '00 00 80 52 c0 03 5f d6 1f 20 03 d5 1f 20 03 d5 1f 20 03 d5 1f 20 03 d5')
+        .sig_replace('fd 7b bb a9 fd 03 00 91 f3 53 01 a9 a0 17 00 f9 5b c3 ff 97 a1 17 40 f9', '00 00 80 52 c0 03 5f d6 1f 20 03 d5 1f 20 03 d5 1f 20 03 d5 1f 20 03 d5')
+        .sig_replace('01 8b 02 d0 21 80 66 39 01 00 00 b9 00 00 80 52 c0 03 5f d6', '21 00 80 52 01 00 00 b9 00 00 80 52 c0 03 5f d6 1f 20 03 d5'),
     'vendor/lib64/libnvram.so': blob_fixup()
         .add_needed('libbase_shim.so'),
 
