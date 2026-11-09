@@ -447,6 +447,10 @@
     <bool name="config_enableWcgMode">true</bool>
 
     <!-- Whether to enable fp unlock when screen turns off on udfps devices -->
+    <!-- Device illumination supports both 60 and 120 Hz without a refresh-rate vote. -->
+    <bool name="config_ignoreUdfpsVote">true</bool>
+
+    <!-- Whether to enable fp unlock when screen turns off on udfps devices -->
     <bool name="config_screen_off_udfps_enabled">true</bool>
 
     <!-- Default value for fp screen off unlock toggle, it only works for the devices that support
