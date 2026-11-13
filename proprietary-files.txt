@@ -947,7 +947,7 @@ vendor/etc/init/mtk_lbs_service.rc
 vendor/etc/vintf/manifest/mtk_lbs_service.xml
 vendor/lib64/mtk_lbs_service-impl.so
 vendor/lib64/vendor.mediatek.hardware.lbs-V1-ndk.so
-vendor/lib64/vendor.mediatek.hardware.lbs@1.0.so
+vendor/lib64/vendor.mediatek.hardware.lbs@1.0.so;MODULE_SUFFIX=_vendor
 
 # Lights
 vendor/bin/hw/android.hardware.lights-service.mediatek
@@ -1229,7 +1229,7 @@ vendor/etc/init/netdagent.rc
 vendor/lib64/libforkexecwrap.so
 vendor/lib64/libifcutils_mtk.so
 vendor/lib64/vendor.mediatek.hardware.netdagent-V1-ndk.so
-vendor/lib64/vendor.mediatek.hardware.netdagent@1.0.so
+vendor/lib64/vendor.mediatek.hardware.netdagent@1.0.so;MODULE_SUFFIX=_vendor
 
 # Thermal
 vendor/bin/thermal_core
