@@ -9,6 +9,7 @@ import tempfile
 TESTS = Path(__file__).resolve().parent
 SOURCE = TESTS.parent
 HEADERS = [
+    "aidl/android/hardware/biometrics/common/OperationContext.h",
     "aidl/android/hardware/biometrics/fingerprint/ISessionCallback.h",
     "aidl/vendor/nothing/hardware/udfps/BnIlluminationCallback.h",
     "aidl/vendor/nothing/hardware/udfps/IIllumination.h",

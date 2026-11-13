@@ -75,6 +75,11 @@ public:
     void notify(const fingerprint_msg_t* msg);
 
 private:
+    ndk::ScopedAStatus enrollInternal(const HardwareAuthToken& hat,
+            const OperationContext* context, std::shared_ptr<ICancellationSignal>* out);
+    ndk::ScopedAStatus authenticateInternal(int64_t operationId,
+            const OperationContext* context, std::shared_ptr<ICancellationSignal>* out);
+
     fingerprint_device_t* mDevice;
     LockoutTracker mLockoutTracker;
     std::atomic<bool> mClosed = false;

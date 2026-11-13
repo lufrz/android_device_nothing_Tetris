@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
+#include <aidl/android/hardware/biometrics/common/OperationContext.h>
 #include <aidl/android/hardware/biometrics/fingerprint/ISessionCallback.h>
 
 #include <memory>
@@ -17,9 +18,10 @@ public:
     explicit IlluminationController(const std::shared_ptr<ISessionCallback>& callback);
     ~IlluminationController();
 
-    void startOperation();
+    void startOperation(const common::OperationContext* context = nullptr);
+    void updateContext(const common::OperationContext& context);
     void finishOperation();
-    void pointerDown(bool isSyntheticAod = false);
+    void pointerDown(bool isSyntheticAod = false, bool isAod = false);
     void pointerUp();
     void pointerCancel();
     void vendorPointerDown();
@@ -30,7 +32,7 @@ public:
 
 private:
     enum class ContactSource { Ui, Aod, Vendor };
-    void updateContact(ContactSource source, bool down);
+    void updateContact(ContactSource source, bool down, bool isAod = false);
     void reconcile();
 
     std::shared_ptr<IlluminationState> mState;

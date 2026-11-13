@@ -62,12 +62,17 @@ ndk::ScopedAStatus Session::revokeChallenge(int64_t challenge) {
 
 ndk::ScopedAStatus Session::enroll(const HardwareAuthToken& hat,
                                    std::shared_ptr<ICancellationSignal>* out) {
+    return enrollInternal(hat, nullptr, out);
+}
+
+ndk::ScopedAStatus Session::enrollInternal(const HardwareAuthToken& hat,
+        const OperationContext* context, std::shared_ptr<ICancellationSignal>* out) {
     ALOGI("enroll");
 
     hw_auth_token_t authToken;
     translate(hat, authToken);
 
-    mIllumination.startOperation();
+    mIllumination.startOperation(context);
     int error = mDevice->enroll(mDevice, &authToken);
     if (error) {
         mIllumination.finishOperation();
@@ -81,9 +86,14 @@ ndk::ScopedAStatus Session::enroll(const HardwareAuthToken& hat,
 
 ndk::ScopedAStatus Session::authenticate(int64_t operationId,
                                          std::shared_ptr<ICancellationSignal>* out) {
+    return authenticateInternal(operationId, nullptr, out);
+}
+
+ndk::ScopedAStatus Session::authenticateInternal(int64_t operationId,
+        const OperationContext* context, std::shared_ptr<ICancellationSignal>* out) {
     ALOGI("authenticate");
 
-    mIllumination.startOperation();
+    mIllumination.startOperation(context);
     int error = mDevice->authenticate(mDevice, operationId);
     if (error) {
         mIllumination.finishOperation();
@@ -184,15 +194,15 @@ ndk::ScopedAStatus Session::onUiReady() {
 }
 
 ndk::ScopedAStatus Session::authenticateWithContext(
-        int64_t operationId, const common::OperationContext& /*context*/,
+        int64_t operationId, const common::OperationContext& context,
         std::shared_ptr<common::ICancellationSignal>* out) {
-    return authenticate(operationId, out);
+    return authenticateInternal(operationId, &context, out);
 }
 
 ndk::ScopedAStatus Session::enrollWithContext(const keymaster::HardwareAuthToken& hat,
-                                              const common::OperationContext& /*context*/,
+                                              const common::OperationContext& context,
                                               std::shared_ptr<common::ICancellationSignal>* out) {
-    return enroll(hat, out);
+    return enrollInternal(hat, &context, out);
 }
 
 ndk::ScopedAStatus Session::detectInteractionWithContext(
@@ -208,7 +218,7 @@ ndk::ScopedAStatus Session::onPointerDownWithContext(const PointerContext& conte
             context.time == 0 && context.gestureStart == 0;
     ALOGI("onPointerDownWithContext: x=%f, y=%f, isAod=%d, synthetic=%d", context.x,
           context.y, context.isAod, syntheticAod);
-    mIllumination.pointerDown(syntheticAod);
+    mIllumination.pointerDown(syntheticAod, context.isAod);
     return ndk::ScopedAStatus::ok();
 }
 
@@ -216,7 +226,8 @@ ndk::ScopedAStatus Session::onPointerUpWithContext(const PointerContext& context
     return onPointerUp(context.pointerId);
 }
 
-ndk::ScopedAStatus Session::onContextChanged(const common::OperationContext& /*context*/) {
+ndk::ScopedAStatus Session::onContextChanged(const common::OperationContext& context) {
+    mIllumination.updateContext(context);
     return ndk::ScopedAStatus::ok();
 }
 
@@ -226,6 +237,9 @@ ndk::ScopedAStatus Session::onPointerCancelWithContext(const PointerContext& /*c
 }
 
 ndk::ScopedAStatus Session::setIgnoreDisplayTouches(bool /*shouldIgnore*/) {
+    // Required no-op with halHandlesDisplayTouches=false. OperationContext
+    // supplies the policy for unsolicited vendor contacts without replacing
+    // SystemUI's own touch handling.
     return ndk::ScopedAStatus::ok();
 }
 

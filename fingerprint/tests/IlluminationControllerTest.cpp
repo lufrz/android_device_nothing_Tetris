@@ -6,6 +6,9 @@
 
 using namespace aidl::android::hardware::biometrics::fingerprint;
 using namespace aidl::vendor::nothing::hardware::udfps;
+using aidl::android::hardware::biometrics::common::DisplayState;
+using aidl::android::hardware::biometrics::common::OperationContext;
+using aidl::android::hardware::biometrics::common::OperationState;
 
 struct Callback final : ISessionCallback {
     int acquisitions = 0;
@@ -27,11 +30,31 @@ struct Service final : IIllumination {
     int ends = 0;
     bool beginFails = false;
     bool endFails = false;
+    int32_t version = 2;
+    bool versionFails = false;
+    int legacyBegins = 0;
+    int contextualBegins = 0;
+    std::vector<std::optional<bool>> ambientRequests;
     std::weak_ptr<BnIlluminationCallback> client;
     ndk::ScopedAStatus begin(const std::shared_ptr<BnIlluminationCallback>& token,
                             int x, int y, int radius) override {
+        ++legacyBegins;
+        return beginCapture(token, x, y, radius, std::nullopt);
+    }
+    ndk::ScopedAStatus beginWithContext(const std::shared_ptr<BnIlluminationCallback>& token,
+                                       int x, int y, int radius, bool ambient) override {
+        ++contextualBegins;
+        return beginCapture(token, x, y, radius, ambient);
+    }
+    ndk::ScopedAStatus getInterfaceVersion(int32_t* result) override {
+        *result = version;
+        return ndk::ScopedAStatus(!versionFails);
+    }
+    ndk::ScopedAStatus beginCapture(const std::shared_ptr<BnIlluminationCallback>& token,
+                                   int x, int y, int radius, std::optional<bool> ambient) {
         assert(x == 540 && y == 2109 && radius == 93);
         ++begins;
+        ambientRequests.push_back(ambient);
         client = token;
         return ndk::ScopedAStatus(!beginFails);
     }
@@ -75,7 +98,181 @@ static void assertReset() {
             std::string("/sys/devices/platform/soc/1401a000.dsi0/hbm"), std::string("0")));
 }
 
+static OperationContext context(DisplayState display, bool ignoreTouches = false) {
+    OperationContext result;
+    result.displayState = display;
+    result.operationState = OperationState::make<OperationState::Tag::fingerprintOperationState>(
+            OperationState::FingerprintOperationState{ignoreTouches});
+    return result;
+}
+
+static void testOperationContext() {
+    for (const auto display : {DisplayState::LOCKSCREEN, DisplayState::SCREENSAVER}) {
+        // The framework restriction suppresses raw Goodix input, but an actual
+        // pointer delivered by SystemUI remains authorization for a new capture.
+        Fixture f;
+        auto restricted = context(display, true);
+        f.controller.startOperation(&restricted);
+        f.vendorDown();
+        assert(f.service->begins == 0);
+        f.down();
+        assert(f.service->begins == 1 && f.service->contextualBegins == 1);
+        assert(f.service->ambientRequests.back() == false);
+        f.up();
+        assert(f.service->ends == 1);
+        f.vendorDown();
+        assert(f.service->begins == 1);
+        f.vendorUp();
+    }
+    {  // A newly restricted UI revokes a vendor-only scan. Becoming permissive
+       // must not resurrect the held finger or honor a stale failure callback.
+        Fixture f;
+        auto allowed = context(DisplayState::LOCKSCREEN);
+        auto restricted = context(DisplayState::LOCKSCREEN, true);
+        f.controller.startOperation(&allowed);
+        f.vendorDown();
+        auto stale = f.token();
+        f.controller.updateContext(restricted);
+        assert(f.service->begins == 1 && f.service->ends == 1);
+        host::writes.clear();
+        stale->onFailure();
+        assert(host::writes.empty() && f.callback->acquisitions == 0);
+        f.controller.updateContext(allowed);
+        f.vendorDown();
+        assert(f.service->begins == 1);
+        f.vendorUp();
+        f.vendorDown();
+        assert(f.service->begins == 2);
+        stale->onFailure();
+        assert(host::writes.empty() && f.callback->acquisitions == 0);
+    }
+    for (const auto display : {DisplayState::NO_UI, DisplayState::AOD}) {
+        // Screen-off context preserves the physical wake path even while the
+        // UI's touch overlay is unavailable and reports ignoreTouches=true.
+        Fixture f;
+        auto ambient = context(display, true);
+        f.controller.startOperation(&ambient);
+        f.vendorDown();
+        assert(f.service->begins == 1 && f.service->ambientRequests.back() == true);
+        auto original = f.token();
+        auto waking = context(DisplayState::LOCKSCREEN, true);
+        f.controller.updateContext(waking);
+        f.controller.updateContext(waking);
+        assert(f.service->begins == 1 && f.service->ends == 0 && f.token() == original);
+        f.vendorUp();
+        assert(f.service->ends == 1);
+        f.vendorDown();  // A new raw lockscreen contact is now restricted.
+        assert(f.service->begins == 1);
+    }
+    {  // Older callers may supply the deprecated isAod field alone.
+        Fixture f;
+        auto ambient = context(DisplayState::UNKNOWN, true);
+        ambient.isAod = true;
+        f.controller.startOperation(&ambient);
+        f.vendorDown();
+        assert(f.service->begins == 1 && f.service->ambientRequests.back() == true);
+    }
+    for (bool synthetic : {false, true}) {
+        // Both a real dozing MotionEvent and the synthetic pulse communicate
+        // ambient origin; neither must be classified solely from screen state.
+        Fixture f;
+        f.controller.pointerDown(synthetic, true);
+        assert(f.service->begins == 1 && f.service->ambientRequests.back() == true);
+        f.up();
+        assert(f.service->ends == 1);
+    }
+    {  // An accepted synthetic pulse itself implies ambient origin.
+        Fixture f;
+        f.controller.pointerDown(true, false);
+        assert(f.service->begins == 1 && f.service->ambientRequests.back() == true);
+    }
+    {  // A rejected late AOD hint must not bypass a new lockscreen restriction.
+        Fixture f;
+        f.vendorDown();
+        f.vendorUp();
+        f.aodDown();
+        assert(f.service->begins == 1 && f.service->ends == 1);
+        f.controller.updateContext(context(DisplayState::LOCKSCREEN, true));
+        f.vendorDown();
+        assert(f.service->begins == 1 && f.service->ends == 1);
+    }
+    {  // Legacy operations clear previous context; updates while idle cannot
+       // preconfigure an operation that has not been started yet.
+        Fixture f;
+        auto restricted = context(DisplayState::LOCKSCREEN, true);
+        f.controller.startOperation(&restricted);
+        f.vendorDown();
+        assert(f.service->begins == 0);
+        f.controller.finishOperation();
+        f.controller.updateContext(restricted);
+        f.controller.startOperation();
+        f.vendorDown();
+        assert(f.service->begins == 1 && f.service->ambientRequests.back() == false);
+        f.controller.finishOperation();
+        f.controller.updateContext(context(DisplayState::AOD, true));
+        f.controller.startOperation();
+        f.vendorDown();
+        assert(f.service->begins == 2 && f.service->ambientRequests.back() == false);
+    }
+    for (int missingPolicy = 0; missingPolicy < 3; ++missingPolicy) {
+        // Context hints may be absent, unknown or unrelated to fingerprint.
+        // None is authority to disable the physical sensor.
+        Fixture f;
+        auto permissive = context(DisplayState::LOCKSCREEN, true);
+        if (missingPolicy == 0) permissive.operationState.reset();
+        if (missingPolicy == 1) permissive.displayState = DisplayState::UNKNOWN;
+        if (missingPolicy == 2) {
+            permissive.operationState = OperationState::make<OperationState::Tag::faceOperationState>(
+                    OperationState::FaceOperationState{});
+        }
+        f.controller.startOperation(&permissive);
+        f.vendorDown();
+        auto original = f.token();
+        f.controller.updateContext(permissive);
+        f.controller.updateContext(permissive);
+        assert(f.service->begins == 1 && f.service->ends == 0 && f.token() == original);
+    }
+    {  // A SystemUI pointer already in flight stays valid under touch policy
+       // updates; once it lifts, its remaining vendor copy is revoked.
+        Fixture f;
+        f.down();
+        f.vendorDown();
+        auto original = f.token();
+        f.controller.updateContext(context(DisplayState::LOCKSCREEN, true));
+        assert(f.service->ends == 0 && f.token() == original);
+        f.up();
+        assert(f.service->ends == 1);
+        f.vendorDown();
+        assert(f.service->begins == 1);
+        f.vendorUp();
+    }
+    {  // An older renderer remains usable through the frozen V1 entry point.
+        Fixture f;
+        f.service->version = 1;
+        f.aodDown();
+        assert(f.service->begins == 1 && f.service->legacyBegins == 1);
+        assert(f.service->contextualBegins == 0 && !f.service->ambientRequests.back());
+        f.up();
+        assert(f.service->ends == 1);
+    }
+    {  // Failed interface negotiation must not start an unverified transaction.
+       // The current contact fails safely and a physical retry can recover.
+        Fixture f;
+        f.service->versionFails = true;
+        f.down();
+        assert(f.service->begins == 0 && f.callback->acquisitions == 1);
+        assertReset();
+        f.service->versionFails = false;
+        f.down();
+        assert(f.service->begins == 0 && f.callback->acquisitions == 1);
+        f.up();
+        f.down();
+        assert(f.service->begins == 1 && f.service->contextualBegins == 1);
+    }
+}
+
 int main() {
+    testOperationContext();
     for (bool vendorFirst : {false, true}) {
         // AOD's synthetic hint may precede the first Goodix event. Once Goodix
         // reports the physical lift, its delayed SystemUI hint cannot hold HBM.
@@ -419,5 +616,6 @@ int main() {
     }
     assert(host::links.empty());
     std::cout << "PASS: recoverable illumination failures, contact retry, stale tokens, "
-                 "service restart, UI/vendor overlap, late AOD hints, cancellation and close\n";
+                 "service restart, UI/vendor overlap, late AOD hints, cancellation, close, "
+                 "operation context, touch policy and renderer version compatibility\n";
 }

@@ -4,12 +4,14 @@
 // Minimal host implementations of Android transport and sysfs dependencies.
 // The tests compile the actual IlluminationController.cpp against these seams.
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #define ALOGE(...) ((void)0)
@@ -93,6 +95,32 @@ public:
     template <class T> auto ref() { return std::dynamic_pointer_cast<T>(shared_from_this()); }
 };
 }  // namespace ndk
+namespace aidl::android::hardware::biometrics::common {
+enum class DisplayState { UNKNOWN, LOCKSCREEN, NO_UI, SCREENSAVER, AOD };
+class OperationState {
+public:
+    struct FingerprintOperationState { bool isHardwareIgnoringTouches = false; };
+    struct FaceOperationState {};
+    enum class Tag { fingerprintOperationState, faceOperationState };
+    template <Tag tag, class T> static OperationState make(T value) {
+        OperationState state;
+        state.mValue.template emplace<static_cast<size_t>(tag)>(std::move(value));
+        return state;
+    }
+    Tag getTag() const { return static_cast<Tag>(mValue.index()); }
+    template <Tag tag> const auto& get() const {
+        return std::get<static_cast<size_t>(tag)>(mValue);
+    }
+private:
+    std::variant<FingerprintOperationState, FaceOperationState> mValue{
+            FingerprintOperationState{}};
+};
+struct OperationContext {
+    bool isAod = false;
+    DisplayState displayState = DisplayState::UNKNOWN;
+    std::optional<OperationState> operationState;
+};
+}  // namespace aidl::android::hardware::biometrics::common
 namespace aidl::android::hardware::biometrics::fingerprint {
 enum class AcquiredInfo { INSUFFICIENT };
 enum class Error { HW_UNAVAILABLE };
@@ -113,6 +141,9 @@ public:
     virtual ~IIllumination() = default;
     virtual ndk::ScopedAStatus begin(
             const std::shared_ptr<BnIlluminationCallback>&, int, int, int) = 0;
+    virtual ndk::ScopedAStatus getInterfaceVersion(int32_t*) = 0;
+    virtual ndk::ScopedAStatus beginWithContext(
+            const std::shared_ptr<BnIlluminationCallback>&, int, int, int, bool) = 0;
     virtual ndk::ScopedAStatus end(const std::shared_ptr<BnIlluminationCallback>&) = 0;
     ndk::SpAIBinder asBinder() { return ndk::SpAIBinder(&mBinder); }
     static std::shared_ptr<IIllumination> fromBinder(ndk::SpAIBinder binder);

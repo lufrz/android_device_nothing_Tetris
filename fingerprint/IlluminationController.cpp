@@ -53,11 +53,38 @@ struct IlluminationState {
     bool vendorContactObserved = false;
     bool suppressVendorUntilUp = false;
     bool retryAfterLift = false;
+    bool contextAmbient = false;
+    bool ignoreVendorTouches = false;
+    bool attemptAmbient = false;
     bool closed = false;
     bool geometryValid = false;
     int x = 0;
     int y = 0;
     int radius = 0;
+
+    // Context describes UI policy, not physical display readiness. Unknown or
+    // screen-off states must retain the Goodix wake-sensor path.
+    void setContext(const common::OperationContext* context) {
+        using common::DisplayState;
+        using common::OperationState;
+        contextAmbient = context && (context->displayState == DisplayState::AOD ||
+                context->displayState == DisplayState::NO_UI || context->isAod);
+        ignoreVendorTouches = false;
+        if (!context || contextAmbient ||
+                (context->displayState != DisplayState::LOCKSCREEN &&
+                 context->displayState != DisplayState::SCREENSAVER)) return;
+        if (context->operationState && context->operationState->getTag() ==
+                OperationState::Tag::fingerprintOperationState) {
+            ignoreVendorTouches = context->operationState->get<
+                    OperationState::Tag::fingerprintOperationState>().isHardwareIgnoringTouches;
+        }
+    }
+
+    bool blocksVendorContact() const {
+        // A framework pointer is already authorized by SystemUI. A screen-off
+        // attempt keeps its origin through wake-up, even before its UI hint arrives.
+        return ignoreVendorTouches && !uiContact && !(wanted && attemptAmbient);
+    }
 
     // Only the current owner may reset the panel or report an error. In particular,
     // a delayed onFailure from an older attempt cannot disable a newer capture.
@@ -95,7 +122,7 @@ public:
 
     uint64_t generation() const { return mGeneration; }
 
-    std::shared_ptr<ISessionCallback> begin(int x, int y, int radius) {
+    std::shared_ptr<ISessionCallback> begin(int x, int y, int radius, bool ambient) {
         mService = IIllumination::fromBinder(ndk::SpAIBinder(AServiceManager_checkService(kService)));
         if (!mService) {
             ALOGE("UDFPS illumination service is unavailable");
@@ -107,7 +134,14 @@ public:
             ALOGE("Cannot watch UDFPS illumination service");
             return fail();
         }
-        auto status = mService->begin(ref<IlluminationClient>(), x, y, radius);
+        int32_t version = 0;
+        auto status = mService->getInterfaceVersion(&version);
+        if (status.isOk()) {
+            // A V1 service can still classify the request using PowerManager.
+            status = version >= 2
+                    ? mService->beginWithContext(ref<IlluminationClient>(), x, y, radius, ambient)
+                    : mService->begin(ref<IlluminationClient>(), x, y, radius);
+        }
         if (!status.isOk()) {
             ALOGE("Cannot begin UDFPS illumination: %s", status.getDescription().c_str());
             return fail();
@@ -167,7 +201,7 @@ void IlluminationController::forceOff() {
     }
 }
 
-void IlluminationController::startOperation() {
+void IlluminationController::startOperation(const common::OperationContext* context) {
     {
         std::lock_guard lock(mState->mutex);
         if (mState->closed) return;
@@ -177,9 +211,30 @@ void IlluminationController::startOperation() {
         mState->uiContact = false;
         mState->aodContact = false;
         mState->vendorContact = false;
+        mState->uiContactStarted = false;
+        mState->vendorContactStarted = false;
         mState->suppressVendorUntilUp = false;
         mState->retryAfterLift = false;
+        mState->attemptAmbient = false;
+        mState->setContext(context);
     }
+    reconcile();
+}
+
+void IlluminationController::updateContext(const common::OperationContext& context) {
+    {
+        std::lock_guard lock(mState->mutex);
+        if (mState->closed || !mState->active) return;
+        mState->setContext(&context);
+        if (mState->vendorContact && mState->blocksVendorContact()) {
+            ++mState->generation;
+            mState->wanted = false;
+            mState->vendorContact = false;
+            mState->suppressVendorUntilUp = true;
+        }
+    }
+    // Becoming eligible does not replay a held contact. A new UI gesture or
+    // physical lift/down must authorize the next capture.
     reconcile();
 }
 
@@ -198,8 +253,9 @@ void IlluminationController::finishOperation() {
     reconcile();
 }
 
-void IlluminationController::pointerDown(bool isSyntheticAod) {
-    updateContact(isSyntheticAod ? ContactSource::Aod : ContactSource::Ui, true);
+void IlluminationController::pointerDown(bool isSyntheticAod, bool isAod) {
+    updateContact(isSyntheticAod ? ContactSource::Aod : ContactSource::Ui, true,
+                  isAod || isSyntheticAod);
 }
 
 void IlluminationController::pointerUp() {
@@ -214,21 +270,27 @@ void IlluminationController::vendorPointerUp() {
     updateContact(ContactSource::Vendor, false);
 }
 
-void IlluminationController::updateContact(ContactSource source, bool down) {
+void IlluminationController::updateContact(ContactSource source, bool down, bool isAod) {
     {
         std::lock_guard lock(mState->mutex);
         if (mState->closed || (down && !mState->active)) return;
         const bool vendor = source == ContactSource::Vendor;
+        // Even a suppressed physical event disqualifies late synthetic AOD hints
+        // from the first-use fallback that assumes Goodix has not reported yet.
+        if (vendor) mState->vendorContactObserved = true;
         if (vendor && mState->suppressVendorUntilUp) {
             if (down) return;
             mState->suppressVendorUntilUp = false;
+        }
+        if (vendor && down && mState->blocksVendorContact()) {
+            mState->suppressVendorUntilUp = true;
+            return;
         }
         const bool newUiContact = source == ContactSource::Ui && down && !mState->uiContact;
         const bool newVendorContact = vendor && down && !mState->vendorContact;
         const bool newCapture = (newUiContact && mState->uiContactStarted) ||
                 (newVendorContact && mState->vendorContactStarted);
         if (vendor) {
-            mState->vendorContactObserved = true;
             mState->vendorContact = down;
             if (!down) {
                 mState->aodContact = false;
@@ -240,10 +302,14 @@ void IlluminationController::updateContact(ContactSource source, bool down) {
             // SystemUI also uses this release for AOD timeout and overlay hide.
             if (!down) mState->aodContact = false;
         }
+        if (mState->vendorContact && mState->blocksVendorContact()) {
+            mState->vendorContact = false;
+            mState->suppressVendorUntilUp = true;
+        }
         // Permit the first AOD hint before Goodix has reported any contact.
         // Afterwards a delayed hint cannot resurrect a released finger, or keep
-        // illumination on after its physical lift. A fresh vendor down still
-        // starts the next scan, including when its AOD hint arrived first.
+        // illumination on after its physical lift. A fresh eligible vendor down
+        // still starts the next scan when its AOD hint arrived first.
         const bool touching = mState->uiContact || mState->vendorContact ||
                 (mState->aodContact && !mState->vendorContactObserved &&
                         !mState->suppressVendorUntilUp);
@@ -254,12 +320,15 @@ void IlluminationController::updateContact(ContactSource source, bool down) {
         if (mState->wanted != wanted || (wanted && newCapture)) {
             ++mState->generation;
             mState->wanted = wanted;
+            mState->attemptAmbient = wanted && (mState->contextAmbient || isAod);
             // The opposite source may still describe the previous contact.
             // Its first fresh down joins this attempt instead of restarting it.
             mState->uiContactStarted = false;
             mState->vendorContactStarted = false;
         }
         if (wanted) {
+            // Preserve an explicit dozing pointer if it joins a vendor contact.
+            mState->attemptAmbient |= isAod;
             mState->uiContactStarted |= newUiContact;
             mState->vendorContactStarted |= newVendorContact;
         }
@@ -308,6 +377,7 @@ void IlluminationController::reconcile() {
         std::lock_guard requestLock(mRequestMutex);
         uint64_t generation;
         bool wanted;
+        bool ambient;
         {
             std::lock_guard lock(mState->mutex);
             generation = mState->generation;
@@ -321,6 +391,7 @@ void IlluminationController::reconcile() {
             std::lock_guard lock(mState->mutex);
             generation = mState->generation;
             wanted = mState->active && mState->wanted && !mState->closed;
+            ambient = mState->attemptAmbient;
         }
         if (wanted && !mClient) {
             if (!mState->geometryValid) {
@@ -328,7 +399,7 @@ void IlluminationController::reconcile() {
                 failure = mState->fail(generation);
             } else {
                 mClient = ndk::SharedRefBase::make<IlluminationClient>(mState, generation);
-                failure = mClient->begin(mState->x, mState->y, mState->radius);
+                failure = mClient->begin(mState->x, mState->y, mState->radius, ambient);
             }
         }
     }
