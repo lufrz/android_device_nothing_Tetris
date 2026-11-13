@@ -5,5 +5,5 @@ system_public_prop(tetrisparts_thermal_request_prop)
 # otherwise vendor init rejects actions referencing init.svc.thermal_core.
 system_restricted_prop(tetrisparts_thermal_daemon_prop)
 
-# Parts authorizes one audio mode; the vendor audio HAL only reads it.
-system_restricted_prop(tetris_parts_audio_prop)
+# Parts publishes consent for the vendor init control services.
+system_restricted_prop(tetris_parts_consent_prop)

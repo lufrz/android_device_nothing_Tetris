@@ -1,0 +1,4 @@
+set_prop(tetris_parts_app, tetris_parts_consent_prop)
+
+# Only Parts may change the consent gate for its optional controls.
+neverallow { domain -init -tetris_parts_app } tetris_parts_consent_prop:property_service set;
