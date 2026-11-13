@@ -22,4 +22,5 @@ package vendor.nothing.hardware.udfps;
 interface IIllumination {
   void begin(in vendor.nothing.hardware.udfps.IIlluminationCallback client, int x, int y, int radius);
   void end(in vendor.nothing.hardware.udfps.IIlluminationCallback client);
+  void beginWithContext(in vendor.nothing.hardware.udfps.IIlluminationCallback client, int x, int y, int radius, boolean ambient);
 }

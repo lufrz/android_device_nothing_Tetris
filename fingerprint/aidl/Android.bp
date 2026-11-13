@@ -10,6 +10,9 @@ aidl_interface {
     versions_with_info: [{
         version: "1",
         imports: [],
+    }, {
+        version: "2",
+        imports: [],
     }],
     backend: {
         java: {

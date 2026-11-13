@@ -15,4 +15,12 @@ interface IIllumination {
 
     /** Cancels pending work and restores the display for this owner only. */
     void end(in IIlluminationCallback client);
+
+    /**
+     * Starts a capture with its ambient origin supplied by the fingerprint HAL.
+     * An ambient hint survives a wake transition; false leaves classification to
+     * the service. It does not replace display, presentation or HBM readiness.
+     */
+    void beginWithContext(in IIlluminationCallback client, int x, int y, int radius,
+            boolean ambient);
 }
