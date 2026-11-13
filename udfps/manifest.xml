@@ -1,7 +1,7 @@
 <manifest version="1.0" type="framework">
     <hal format="aidl">
         <name>vendor.nothing.hardware.udfps</name>
-        <version>1</version>
+        <version>2</version>
         <fqname>IIllumination/default</fqname>
     </hal>
 </manifest>

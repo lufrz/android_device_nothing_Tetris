@@ -9,7 +9,7 @@ android_app {
     certificate: "platform",
     privileged: true,
     system_ext_specific: true,
-    static_libs: ["vendor.nothing.hardware.udfps-V1-java"],
+    static_libs: ["vendor.nothing.hardware.udfps-V2-java"],
     jni_libs: ["libtetris_udfps_surface"],
     required: ["tetris_udfps_framework_manifest"],
     optimize: { enabled: false },

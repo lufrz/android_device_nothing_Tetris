@@ -85,6 +85,7 @@ public final class IlluminationApplication extends Application {
     private volatile boolean mLastCleanupSucceeded;
     private volatile String mLastHbmState = "unknown";
     private volatile String mLastScanContext = "none";
+    private volatile boolean mLastAmbientHint;
     private long mScanContextToken;
     private int mWidth;
     private int mHeight;
@@ -165,6 +166,16 @@ public final class IlluminationApplication extends Application {
         @Override public String getInterfaceHash() { return IIllumination.HASH; }
 
         @Override public void begin(IIlluminationCallback client, int x, int y, int radius) {
+            beginRequest(client, x, y, radius, false);
+        }
+
+        @Override public void beginWithContext(IIlluminationCallback client, int x, int y,
+                int radius, boolean ambient) {
+            beginRequest(client, x, y, radius, ambient);
+        }
+
+        private void beginRequest(IIlluminationCallback client, int x, int y, int radius,
+                boolean ambient) {
             enforceCaller();
             if (client == null) throw new IllegalArgumentException("Missing owner callback");
             // Validate the physical rectangle before queueing work or accepting ownership.
@@ -173,7 +184,7 @@ public final class IlluminationApplication extends Application {
                 if (mOwner != null && mOwner.token.equals(client.asBinder())) return;
                 if (mOwner != null) mOwner.unlink();
                 nativeSetGeneration(++mGeneration);
-                Request request = new Request(client, x, y, radius, mGeneration);
+                Request request = new Request(client, x, y, radius, mGeneration, ambient);
                 try {
                     request.token.linkToDeath(request, 0);
                 } catch (RemoteException e) {
@@ -223,6 +234,7 @@ public final class IlluminationApplication extends Application {
                 out.println("scanWakeLock=" + (mScanWakeLock != null && mScanWakeLock.isHeld()));
             }
             out.println("scanContext=" + mLastScanContext);
+            out.println("lastAmbientHint=" + mLastAmbientHint);
             out.println("preparation=" + mPreparationState);
             out.println("native=" + nativeGetDiagnostics());
             // Optional read-only driver diagnostics; never part of capture readiness.
@@ -246,19 +258,22 @@ public final class IlluminationApplication extends Application {
         final IBinder token;
         final int x, y, radius;
         final long generation;
+        final boolean ambientHint;
         final long startedAt = SystemClock.uptimeMillis();
         boolean waitingForDisplay;
         boolean renderingStarted;
         boolean contextClassified;
         boolean interactiveAtStart;
         boolean interactiveStateKnown;
-        Request(IIlluminationCallback callback, int x, int y, int radius, long generation) {
+        Request(IIlluminationCallback callback, int x, int y, int radius, long generation,
+                boolean ambientHint) {
             client = callback;
             token = callback.asBinder();
             this.x = x;
             this.y = y;
             this.radius = radius;
             this.generation = generation;
+            this.ambientHint = ambientHint;
         }
         void unlink() { token.unlinkToDeath(this, 0); }
         @Override public void binderDied() {
@@ -294,6 +309,7 @@ public final class IlluminationApplication extends Application {
         mSensorY = request.y;
         mSensorRadius = request.radius;
         mLastReadyElapsedMs = -1;
+        mLastAmbientHint = request.ambientHint;
         try {
             if (!clearHardware()) throw new IOException("Unable to reset fingerprint HBM");
             ensureDisplayReady(request);
@@ -499,7 +515,8 @@ public final class IlluminationApplication extends Application {
         }
         // A pulse may already be ON while non-interactive. Never upgrade its origin
         // to interactive if unlocking wakes the phone before rendering.
-        String mode = request.interactiveAtStart && interactiveNow ? "interactive" : "ambient";
+        String mode = !request.ambientHint && request.interactiveAtStart && interactiveNow
+                ? "interactive" : "ambient";
         try {
             // The versioned prefix is rejected by older kernels, without toggling HBM.
             writeScanContext("scan_v1 begin " + request.generation + " " + mode);

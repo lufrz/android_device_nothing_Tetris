@@ -91,7 +91,7 @@ stubs = {
  void linkToDeath(DeathRecipient recipient,int flags) throws RemoteException;
  boolean unlinkToDeath(DeathRecipient recipient,int flags); }''',
 "android/os/Binder.java": '''package android.os; public class Binder implements IBinder {
- public static int getCallingUid() { return 1000; }
+ public static int callingUid=1000; public static int getCallingUid() { return callingUid; }
  public void linkToDeath(DeathRecipient recipient,int flags) throws RemoteException {}
  public boolean unlinkToDeath(DeathRecipient recipient,int flags) { return true; }
  public final void dumpForTest(java.io.PrintWriter out) { dump(null,out,new String[0]); }
@@ -191,8 +191,9 @@ stubs = {
 "vendor/nothing/hardware/udfps/IIlluminationCallback.java": '''package vendor.nothing.hardware.udfps;
  public interface IIlluminationCallback { android.os.IBinder asBinder(); void onFailure() throws android.os.RemoteException; }''',
 "vendor/nothing/hardware/udfps/IIllumination.java": '''package vendor.nothing.hardware.udfps;
- public interface IIllumination { String DESCRIPTOR="udfps",HASH="test"; int VERSION=1;
+ public interface IIllumination { String DESCRIPTOR="udfps",HASH="test"; int VERSION=2;
  int getInterfaceVersion();String getInterfaceHash();void begin(IIlluminationCallback client,int x,int y,int radius);
+ void beginWithContext(IIlluminationCallback client,int x,int y,int radius,boolean ambient);
  void end(IIlluminationCallback client);abstract class Stub extends android.os.Binder implements IIllumination {} }''',
 "org/lineageos/tetris/udfps/R.java": '''package org.lineageos.tetris.udfps; final class R {
  static final class array { static final int config_udfpsMtkGhbmAlphaMap=0; }
@@ -270,6 +271,7 @@ public final class DisplayLifecycleTest {
  static Client setup(int state){return setup(state,true);}
  static Client setup(int state,boolean powerAvailable){
   Handler.reset();TestHooks.reset();ServiceManager.service=null;service=null;power=new PowerManager();
+  Binder.callingUid=1000;
   power.interactive=state==Display.STATE_ON;
   displays=new DisplayManager();displays.display.state=state;displays.display.committedState=state;
   Application.services.clear();Application.broadcasts=Application.mainTasks=0;
@@ -279,6 +281,7 @@ public final class DisplayLifecycleTest {
   check(service!=null,"startup must register a fresh illumination service");
   return new Client();}
  static void begin(Client client){service.begin(client,540,2109,93);}
+ static void begin(Client client,boolean ambient){service.beginWithContext(client,540,2109,93,ambient);}
  static Object ownerLock(){try{var field=IlluminationApplication.class.getDeclaredField("mLock");
   field.setAccessible(true);return field.get(app);}catch(ReflectiveOperationException e){throw new AssertionError(e);}}
  static Object ownerRequest(){try{var field=IlluminationApplication.class.getDeclaredField("mOwner");
@@ -517,6 +520,66 @@ public final class DisplayLifecycleTest {
   begin(c);Handler.runDue();check(c.failures==1&&TestHooks.shows==0&&!TestHooks.ui,
     "failed reset after ambiguous accepted context must abort instead of rendering");
   System.out.println("PASS: scan context interactive/AOD origin, no upgrade, downgrade, cancellation, replacement, death, old-kernel fallback and ambiguous-write reset");
+ }
+ static void ambientContextBridge(){
+  for(boolean contextual:new boolean[]{false,true}){
+   Client c=setup(Display.STATE_ON);Binder.callingUid=2000;
+   try{if(contextual)begin(c,true);else begin(c);throw new AssertionError("unauthorized begin accepted");}
+   catch(SecurityException expected){}
+   Binder.callingUid=1000;Handler.runDue();
+   check(TestHooks.shows==0&&c.links==0&&dump().contains("owner=false"),
+     "both versions must enforce the HAL UID before taking ownership");
+  }
+  Client c=setup(Display.STATE_ON);begin(c,true);Handler.runDue();
+  check(power.interactiveQueries==2&&TestHooks.shownModes.equals(java.util.List.of("ambient"))
+    &&dump().contains("lastAmbientHint=true")&&!TestHooks.ui,
+    "explicit ambient origin must survive an already interactive power state and retain settling");
+  begin(c,false);Handler.runDue();
+  check(c.links==1&&TestHooks.contextBegins==1&&dump().contains("lastAmbientHint=true"),
+    "duplicate owner must not replace a capture's fixed origin");
+  Handler.advance(17);check(TestHooks.ui,"contextual capture must authorize only after panel settling");
+  service.end(c);Handler.runDue();
+  c=new Client();begin(c);Handler.runDue();
+  check(TestHooks.contextMode.equals("interactive")&&dump().contains("lastAmbientHint=false"),
+    "legacy clients must retain PowerManager classification without inheriting a prior ambient hint");
+  service.end(c);Handler.runDue();
+  c=setup(Display.STATE_ON);power.interactive=false;begin(c,false);Handler.runDue();
+  check(TestHooks.contextMode.equals("ambient"),"false hint cannot force a noninteractive scan to interactive");
+  service.end(c);Handler.runDue();
+  c=setup(Display.STATE_OFF);power.interactive=true;begin(c,true);Handler.runDue();
+  displays.request(Display.STATE_ON);Handler.runDue();
+  check(TestHooks.shows==0&&TestHooks.contextBegins==0&&power.lock.isHeld(),
+    "ambient hint cannot bypass requested and committed display readiness");
+  displays.commit(Display.STATE_ON);Handler.runDue();
+  check(TestHooks.contextMode.equals("ambient")&&TestHooks.hbm&&!TestHooks.ui,
+    "committed pulse must retain the ambient origin while waiting for panel settling");
+  Handler.advance(17);check(TestHooks.ui&&power.wakes==0,"ambient capture must use SystemUI's pulse without full wake");
+  service.end(c);Handler.runDue();
+  for(int failedQuery:new int[]{1,2}){
+   c=setup(Display.STATE_ON);power.failQueryAt=failedQuery;begin(c,true);Handler.runDue();
+   check(power.interactiveQueries==2&&TestHooks.contextBegins==0
+     &&TestHooks.shownModes.equals(java.util.List.of("none")),
+     "an ambient hint must not bypass either actual power state query or unknown-state fallback");
+   service.end(c);Handler.runDue();
+  }
+  Client old=setup(Display.STATE_ON);begin(old,true);Handler.runDue();long oldToken=TestHooks.contextToken;
+  Client replacement=new Client();begin(replacement,false);Handler.runDue();long newToken=TestHooks.contextToken;
+  check(oldToken!=newToken&&TestHooks.contextMode.equals("interactive")
+    &&TestHooks.events.indexOf("scan_v1 end "+oldToken)
+      <TestHooks.events.indexOf("scan_v1 begin "+newToken+" interactive"),
+    "owner replacement must end the old ambient token before publishing its own classification");
+  old.die();service.end(old);Handler.runDue();Handler.advance(17);
+  check(TestHooks.contextToken==newToken&&TestHooks.ui,
+    "stale contextual owner death or cancellation must not clear the replacement");
+  replacement.die();Handler.runDue();
+  check(TestHooks.contextToken==0&&!TestHooks.hbm&&!TestHooks.ui&&!power.lock.isHeld(),
+    "contextual owner death must clear hardware and wake lock");
+  c=setup(Display.STATE_OFF);begin(c,true);Handler.runDue();service.end(c);
+  displays.change(Display.STATE_ON);Handler.runDue();Handler.advance(10000);
+  check(TestHooks.shows==0&&TestHooks.contextBegins==0&&c.failures==0&&!power.lock.isHeld(),
+    "cancelled contextual wait must not revive on a late pulse or timeout");
+  noForcedAod("context bridge must not request visible AOD");
+  System.out.println("PASS: V2 ambient hint, V1 fallback, caller checks, readiness/power gates and contextual owner cancellation/replacement");
  }
  static void scanContextUnknownPower(){
   for(boolean initiallyInteractive:new boolean[]{false,true})for(int failedQuery:new int[]{1,2}){
@@ -888,6 +951,7 @@ public final class DisplayLifecycleTest {
   preparationEligibility();preparationCoalescingAndReuse();
   preparationTouchAndStaleCompletion();preparationDelayedWorkerRateLimit();preparationFailuresAndGeometry();
   scanContextLifecycle();
+  ambientContextBridge();
   scanContextUnknownPower();
   optionalHbmTiming();
   committedDisplayGate();
