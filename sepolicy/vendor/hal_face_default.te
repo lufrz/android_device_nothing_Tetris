@@ -12,5 +12,4 @@ allow hal_face_default face_vendor_data_file:dir create_dir_perms;
 allow hal_face_default face_vendor_data_file:file create_file_perms;
 
 set_prop(hal_face_default, log_tag_prop)
-set_prop(hal_face_default, vendor_face_prop)
 get_prop(hal_face_default, camera_config_prop)
