@@ -3,13 +3,10 @@ package org.lineageos.settings.tetris.consent
 
 import android.content.Context
 import android.content.Intent
-import android.media.AudioSystem
 import android.os.SystemClock
 import android.os.SystemProperties
 import org.lineageos.settings.tetris.adaptive.AdaptiveRepository
 import org.lineageos.settings.tetris.adaptive.AdaptiveService
-import org.lineageos.settings.tetris.audio.ExperimentalAudioMode
-import org.lineageos.settings.tetris.audio.ExperimentalAudioState
 import org.lineageos.settings.tetris.battery.ChargeBypassSession
 import org.lineageos.settings.tetris.cpu.CpuControlSession
 import org.lineageos.settings.tetris.gpu.GpuControlSession
@@ -43,29 +40,8 @@ internal object PartsFeatureReset {
         reset("cpu") { CpuControlSession.releasePartsOverrides().successful }
         reset("gpu") { GpuControlSession.releasePartsOverrides().successful }
         reset("tcp") { TcpControlSession.manager.disableForConsent() }
-        reset("audio") { disableAudio() }
         reset("thermal") { restoreThermal() }
         return failed
-    }
-
-    private fun disableAudio(): Boolean {
-        val defaults = mapOf(
-            "mode" to "off", "gain" to "0", "software_gain" to "0",
-            "sync_trim" to "0", "output" to "both",
-        )
-        defaults.forEach { (name, value) ->
-            SystemProperties.set("persist.sys.tetris.audio_$name", value)
-        }
-        // The off command revokes the live kernel lease. Saving properties alone
-        // would leave an already-running stream active until its next callback.
-        AudioSystem.setParameters("tetris_audio_mode=off")
-        val status = AudioSystem.getParameters("tetris_audio")
-        val observed = ExperimentalAudioState.parse(status)
-        val stopped = status.isNullOrBlank() || observed != null &&
-            observed.active == ExperimentalAudioMode.OFF && observed.requested == ExperimentalAudioMode.OFF
-        return stopped && defaults.all { (name, value) ->
-            SystemProperties.get("persist.sys.tetris.audio_$name") == value
-        }
     }
 
     private fun restoreThermal(): Boolean {

@@ -232,7 +232,7 @@ fun main() {
         a.requireReleased()
     }
     scenario("cleanup failure cannot be accepted but permits decline") {
-        PartsFeatureReset.failures = listOf("audio")
+        PartsFeatureReset.failures = listOf("gpu")
         val a = activity(true); a.ready(); a.onResume()
         expect(a.screen().error, "Failed cleanup must be reported")
         SystemClock.now = 21_000

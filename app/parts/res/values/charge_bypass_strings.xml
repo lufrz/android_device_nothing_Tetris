@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <resources>
+    <string name="charge_bypass_category_title">Experimental features</string>
     <string name="charge_bypass_title">Charger-powered mode</string>
     <string name="charge_bypass_about">About charging suspension</string>
     <string name="charge_bypass_about_summary">Experimental: use charger power while battery charging is paused. The battery stays connected and may supply extra power under load. Turns off when unplugged or after a reboot. Other charging safety controls remain active.</string>

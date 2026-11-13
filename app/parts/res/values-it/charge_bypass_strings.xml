@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <resources>
+    <string name="charge_bypass_category_title">Funzioni sperimentali</string>
     <string name="charge_bypass_title">Alimentazione da caricatore</string>
     <string name="charge_bypass_about">Informazioni sulla sospensione della ricarica</string>
     <string name="charge_bypass_about_summary">Sperimentale: usa l\'alimentazione del caricabatterie mentre la ricarica della batteria è sospesa. La batteria rimane collegata e può fornire energia aggiuntiva sotto carico. Si disattiva scollegando il caricabatterie o riavviando il telefono. Gli altri controlli di sicurezza della ricarica restano attivi.</string>

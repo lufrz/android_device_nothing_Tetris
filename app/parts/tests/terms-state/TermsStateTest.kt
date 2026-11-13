@@ -17,7 +17,7 @@ fun main() {
         check(!TermsConsent.synchronize(c)); check(!TermsConsent.isAccepted(c))
         check(!TermsConsent.shouldPromptAutomatically(c))
         check(c.prefs.values["identity_version"] == 1)
-        check(c.prefs.values["presented_epoch"] == "terms:1/request:0")
+        check(c.prefs.values["presented_epoch"] == "terms:2/request:1")
     }
     test("reinstall requires manual consent without launching automatically") { c ->
         check(TermsConsent.decide(c, TermsConsent.epoch(c), true))
@@ -27,22 +27,22 @@ fun main() {
         check(!PartsControlGate.allowed)
     }
     test("identity names terms revision and explicit request generation") { c ->
-        check(TermsConsent.epoch(c) == "terms:1/request:0")
+        check(TermsConsent.epoch(c) == "terms:2/request:1")
     }
-    test("legacy accepted terms migrate once without asking again") { c ->
+    test("legacy accepted terms require review for the explicit request") { c ->
         val previous = "a".repeat(64)
         c.prefs.values["accepted_epoch"] = previous
         c.prefs.values["presented_epoch"] = previous
-        check(TermsConsent.synchronize(c)); check(TermsConsent.isAccepted(c))
-        check(!TermsConsent.shouldPromptAutomatically(c))
+        check(!TermsConsent.synchronize(c)); check(!TermsConsent.isAccepted(c))
+        check(TermsConsent.shouldPromptAutomatically(c))
         check(c.prefs.values["identity_version"] == 1)
         check(c.prefs.values["accepted_epoch"] == "terms:1/request:0")
         check(c.prefs.values["presented_epoch"] == "terms:1/request:0")
     }
-    test("legacy refusal or dismissed window stays closed without reappearing") { c ->
+    test("legacy refusal or dismissed window is presented for the explicit request") { c ->
         c.prefs.values["presented_epoch"] = "b".repeat(64)
         check(!TermsConsent.synchronize(c)); check(!TermsConsent.isAccepted(c))
-        check(!TermsConsent.shouldPromptAutomatically(c))
+        check(TermsConsent.shouldPromptAutomatically(c))
         check((c.prefs.values["accepted_epoch"] as? String).orEmpty().isEmpty())
         check(c.prefs.values["presented_epoch"] == "terms:1/request:0")
     }
@@ -50,7 +50,7 @@ fun main() {
         val previous = "c".repeat(64)
         c.prefs.values["accepted_epoch"] = previous
         c.prefs.values["presented_epoch"] = previous
-        check(TermsConsent.synchronize(c))
+        check(!TermsConsent.synchronize(c))
         check(TermsConsent.decide(c, TermsConsent.epoch(c), false))
         check(!TermsConsent.isAccepted(c)); check(!TermsConsent.shouldPromptAutomatically(c))
         check(!PartsControlGate.allowed)
@@ -136,17 +136,19 @@ fun main() {
         check(TermsConsent.markPresented(c))
         check(!TermsConsent.shouldPromptAutomatically(c)); check(!TermsConsent.isAccepted(c))
     }
-    test("explicit request generation requires a new decision") {
-        val next = "terms:1/request:1"
-        val saved = TermsState("terms:1/request:0", "terms:1/request:0")
-        check(!saved.permits(next)); check(saved.needsPresentation(next))
-        val presented = saved.shown(next)
-        check(!presented.permits(next)); check(!presented.needsPresentation(next))
-        val accepted = presented.decide(next, true)
-        check(accepted.permits(next)); check(!accepted.needsPresentation(next))
+    test("explicit request generation requires a new decision") { c ->
+        c.prefs.values["identity_version"] = 1
+        c.prefs.values["accepted_epoch"] = "terms:2/request:0"
+        c.prefs.values["presented_epoch"] = "terms:2/request:0"
+        check(!TermsConsent.synchronize(c)); check(TermsConsent.shouldPromptAutomatically(c))
+        check(!PartsControlGate.allowed)
+        check(TermsConsent.markPresented(c))
+        check(!TermsConsent.isAccepted(c)); check(!TermsConsent.shouldPromptAutomatically(c))
+        check(TermsConsent.decide(c, TermsConsent.epoch(c), true))
+        check(TermsConsent.synchronize(c)); check(!TermsConsent.shouldPromptAutomatically(c))
     }
     test("windows for different terms or requests cannot approve the current identity") { c ->
-        for (old in listOf("terms:0/request:0", "terms:1/request:1")) {
+        for (old in listOf("terms:0/request:0", "terms:1/request:0", "terms:1/request:2")) {
             check(!TermsConsent.decide(c, old, true)); check(!TermsConsent.isAccepted(c))
         }
     }
@@ -169,7 +171,7 @@ fun main() {
         check(!TermsConsent.isAccepted(c) && !PartsControlGate.allowed)
         check(SystemProperties.get("sys.tetrisparts.consent", "0") == "0")
     }
-    test("network cleanup failure cannot keep audio enabled after terms invalidation") { c ->
+    test("network cleanup failure cannot keep controls enabled after terms invalidation") { c ->
         check(TermsConsent.decide(c, TermsConsent.epoch(c), true))
         c.prefs.values["accepted_epoch"] = "terms:0/request:0"
         c.prefs.values["presented_epoch"] = "terms:0/request:0"

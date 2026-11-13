@@ -164,9 +164,6 @@ internal fun TermsScreen(
             item("memory_adaptive") {
                 TermsSection(R.string.terms_memory_title, R.string.terms_memory_body)
             }
-            item("audio") {
-                TermsSection(R.string.terms_audio_title, R.string.terms_audio_body)
-            }
             item("network") {
                 TermsSection(R.string.terms_network_title, R.string.terms_network_body)
             }

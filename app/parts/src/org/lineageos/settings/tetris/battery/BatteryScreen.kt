@@ -192,7 +192,7 @@ fun BatteryScreen(onBack: () -> Unit) {
                 PartsInfoCard(title = stringResource(R.string.battery_about),
                     body = stringResource(R.string.battery_about_summary))
             }
-            item("charge_bypass_section") { PartsCategoryTitle(stringResource(R.string.experimental_audio_title)) }
+            item("charge_bypass_section") { PartsCategoryTitle(stringResource(R.string.charge_bypass_category_title)) }
             item("charge_bypass_control") {
                 val status = bypass.status
                 val summary = when {

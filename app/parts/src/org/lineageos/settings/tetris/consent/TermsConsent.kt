@@ -8,9 +8,9 @@ import org.lineageos.settings.tetris.network.TcpControlSession
 
 internal object TermsConsent {
     // Increase only when the terms change, independently of ROM/APK releases.
-    private const val REVISION = 1
+    private const val REVISION = 2
     // Increase only when an explicit request requires presenting unchanged terms again.
-    private const val PROMPT_GENERATION = 0
+    private const val PROMPT_GENERATION = 1
     private const val PROPERTY = "sys.tetrisparts.consent"
     private const val PREFERENCES = "terms_consent"
     private const val ACCEPTED = "accepted_epoch"
@@ -52,7 +52,7 @@ internal object TermsConsent {
                 val cleared = TcpControlSession.clearPendingRequests()
                 if (accepted) check(cleared)
                 SystemProperties.set(PROPERTY, value)
-                // A failed network cleanup must never leave the audio gate open on revocation.
+                // A failed network cleanup must never leave the control gate open on revocation.
                 check(cleared)
             }
             accepted
